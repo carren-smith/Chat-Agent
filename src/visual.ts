@@ -687,9 +687,12 @@ PowerBI专家：
 
     // ============================================================
     // buildFinalUserPrompt：每次用户发送消息时，静默组装发往后台的完整 prompt。
-    // 参考模板 callAIAPIWithStreaming 中的 finalPrompt 构建逻辑：
     //   finalPrompt = 数据上下文 + 用户原始问题 + HTML 格式强制指令
-    // UI 侧只显示 userText（保持界面干净），不暴露注入内容。
+    //
+    // 【数据时效性保障】
+    // 历史对话中的 assistant 回复可能包含旧的数据事实（如旧年份/行数），
+    // 必须在 prompt 头部明确声明"当前数据上下文优先于历史"，
+    // 防止模型在切片器状态改变后仍沿用历史里的旧数据描述。
     // ============================================================
     private buildFinalUserPrompt(userText: string): string {
         const dataCtx = this.prepareDataContext();
@@ -697,9 +700,12 @@ PowerBI专家：
             return userText;
         }
         return (
+            `【数据时效性声明】以下"数据上下文"是本次请求的实时最新状态。` +
+            `如历史对话中出现的年份、行数、维度值等数据描述与下方数据上下文不一致，` +
+            `请以下方数据上下文为唯一权威依据，历史描述视为已过期，不得引用。\n\n` +
             `数据上下文：\n${dataCtx}\n\n` +
             `用户问题：${userText}\n\n` +
-            `请基于提供的数据回答用户问题。如果是要求写报告、方案，请使用正规商业咨询报告格式（包含 <h3> 标题、详细章节等），确保美观精致；如果是正常交流，则保持简洁。\n` +
+            `请严格基于上方最新数据上下文回答，不要引用历史对话中的旧数据。如果是要求写报告、方案，请使用正规商业咨询报告格式（包含 <h3> 标题、详细章节等），确保美观精致；如果是正常交流，则保持简洁。\n` +
             `请务必使用HTML格式返回结果：\n` +
             `1. 使用<h3>、<h4>作为标题\n` +
             `2. 使用<table class="report-table">显示表格\n` +
@@ -1866,7 +1872,9 @@ PowerBI专家：
 
         // 历史消息：排除当前 userMsg（倒数第2）和空 botMsg（倒数第1）
         const historyMessages: Array<{ role: string; content: string }> = [];
-        const recentMsgs = this.messages.slice(-12, -2);
+        // 只取最近 2 轮历史（4条消息）：减少旧数据事实污染窗口。
+        // 切片器状态改变后，超出此窗口的历史回复不会影响当前轮的判断。
+        const recentMsgs = this.messages.slice(-6, -2);
         recentMsgs.forEach(m => {
             const role = m.isUser ? "user" : "assistant";
             let content: string;
@@ -2011,7 +2019,9 @@ PowerBI专家：
         }
 
         const historyMessages: Array<{ role: string; content: string }> = [];
-        const recentMsgs = this.messages.slice(-12, -2);
+        // 只取最近 2 轮历史（4条消息）：减少旧数据事实污染窗口。
+        // 切片器状态改变后，超出此窗口的历史回复不会影响当前轮的判断。
+        const recentMsgs = this.messages.slice(-6, -2);
         recentMsgs.forEach(m => {
             const role = m.isUser ? "user" : "assistant";
             let content: string;
