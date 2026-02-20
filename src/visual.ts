@@ -580,33 +580,60 @@ PowerBI专家：
 
     // ============================================================
     // prepareDataContext：生成完整的数据上下文字符串，供每次请求时注入到 finalPrompt。
-    // 参考模板 prepareDataContext 逻辑：
-    //   1. 列名、行数等结构信息
-    //   2. 自动识别比率指标（format 含 %），数值列只计算总计
-    //   3. 附加筛选器状态（告知 AI 当前分析范围）
-    //   4. 完整数据行，每个单元格经 formatCellValue 处理
+    //
+    // 【架构说明 - 为什么需要"维度范围"节】
+    // Power BI 切片器（Slicer）的工作原理：
+    //   - 切片器选中值后，Power BI 直接给视觉传入预过滤后的 DataView
+    //   - 切片器选择 **不会** 写入 dataView.metadata.filters 或 options.jsonFilters
+    //   - 因此无论怎么读 filter metadata，都读不到切片器的选值
+    //   - 唯一可靠来源：DataView 分类列中实际出现的值 = 切片器过滤后的真实范围
+    //
+    // 本函数固定注入"维度范围"节，把各分类列的唯一值告诉 AI，
+    // 让 AI 知道"当前分析的是哪些年、哪些月、哪些产品……"
     // ============================================================
     private prepareDataContext(): string {
         const ctx = this.reportContext;
         const data = ctx.tableData;
         const cols = ctx.columnNames;
 
-        // 筛选器状态始终注入，让 AI 知道当前分析范围
         let result = "";
 
+        // ── 筛选器元数据（仅 filter pane 添加的筛选器能出现在这里）──
         if (ctx.filters && ctx.filters.length > 0) {
-            result += "【当前筛选器状态】（分析结论必须限定在此范围内，不得泛化到全局）\n";
+            result += "【筛选器（Filter Pane）状态】（分析结论必须限定在此范围内）\n";
             ctx.filters.forEach(f => {
                 result += `- ${f.table}.${f.column} = ${f.values.join("、")}\n`;
             });
             result += "\n";
-        } else {
-            result += "【当前筛选器状态】无筛选条件，分析全量数据\n\n";
         }
 
         if (data.length === 0 || cols.length === 0) {
-            result += "数据表为空，请提示用户在右侧字段面板拖入数据列或度量值。";
+            result += "【当前数据状态】数据表为空，请提示用户在右侧字段面板拖入数据列或度量值。";
             return result;
+        }
+
+        // ── 维度范围：从实际数据行中提取各分类列的唯一值 ──
+        // 这是切片器过滤后的真实结果，是 AI 判断"当前分析什么范围"的唯一可靠依据
+        const dimensionLines: string[] = [];
+        cols.forEach(col => {
+            if (ctx.measures.some(m => m.name === col)) return; // 度量值列跳过
+            const uniqueVals = Array.from(new Set(
+                data.map(r => r[col]).filter(v => v !== null && v !== undefined)
+            )).map(v => String(v));
+            if (uniqueVals.length === 0) return;
+            if (uniqueVals.length <= 30) {
+                dimensionLines.push(`- ${col}（共 ${uniqueVals.length} 个值）：${uniqueVals.join("、")}`);
+            } else {
+                dimensionLines.push(`- ${col}（共 ${uniqueVals.length} 个唯一值，过多不逐一列出）`);
+            }
+        });
+
+        if (dimensionLines.length > 0) {
+            result += "【当前数据维度范围】\n";
+            result += "（此范围已反映切片器/筛选器的实际效果，分析时请严格以此为准，不得推断全量数据）\n";
+            result += dimensionLines.join("\n") + "\n\n";
+        } else if (ctx.filters.length === 0) {
+            result += "【当前数据维度范围】未检测到明确的维度筛选，当前为全量数据视图。\n\n";
         }
 
         result += "数据概览：\n";
@@ -629,7 +656,6 @@ PowerBI专家：
         // 对数值列（非度量值）计算总计
         const sampleRows = data.slice(0, Math.min(data.length, 5));
         cols.forEach(col => {
-            // 若已在 measures 中有记录则跳过
             if (ctx.measures.some(m => m.name === col)) return;
             const sampleVals = sampleRows.map(r => r[col]).filter(v => v !== null && v !== undefined);
             if (sampleVals.length === 0) return;
@@ -770,7 +796,7 @@ PowerBI专家：
     private showContextPreview(): void {
         const ctx = this.reportContext;
         const lines: string[] = [];
-        lines.push(" 当前报表上下文");
+        lines.push("当前报表上下文");
         lines.push("─────────────────");
         lines.push("更新时间：" + (ctx.lastUpdated || "暂无"));
         lines.push("数据：" + ctx.columnNames.length + " 列 × " + ctx.dataRowCount + " 行");
@@ -781,19 +807,37 @@ PowerBI专家：
         if (ctx.measures.length > 0) {
             lines.push("度量值：");
             ctx.measures.forEach(m => {
-                lines.push(" • " + m.name + " = " + m.formattedValue);
+                lines.push("  • " + m.name + " = " + m.formattedValue);
             });
         }
+        // Filter pane 筛选器
         if (ctx.filters.length > 0) {
-            lines.push("筛选器：");
+            lines.push("筛选器（Filter Pane）：");
             ctx.filters.forEach(f => {
-                lines.push(" • " + f.table + "." + f.column + " = " + f.values.join(", "));
+                lines.push("  • " + f.table + "." + f.column + " = " + f.values.join(", "));
             });
         } else {
-            lines.push("筛选器：无");
+            lines.push("筛选器（Filter Pane）：无");
+        }
+        // 从数据中推断维度范围（反映切片器实际效果）
+        if (ctx.tableData.length > 0 && ctx.columnNames.length > 0) {
+            const dimLines: string[] = [];
+            ctx.columnNames.forEach(col => {
+                if (ctx.measures.some(m => m.name === col)) return;
+                const uniqueVals = Array.from(new Set(
+                    ctx.tableData.map(r => r[col]).filter(v => v !== null && v !== undefined)
+                )).map(v => String(v));
+                if (uniqueVals.length > 0 && uniqueVals.length <= 20) {
+                    dimLines.push("  • " + col + "（" + uniqueVals.length + "个）：" + uniqueVals.join("、"));
+                }
+            });
+            if (dimLines.length > 0) {
+                lines.push("当前数据维度范围（切片器效果）：");
+                dimLines.forEach(l => lines.push(l));
+            }
         }
         if (ctx.columnNames.length === 0 && ctx.measures.length === 0) {
-            lines.push(" 尚未绑定数据字段");
+            lines.push("尚未绑定数据字段");
             lines.push("请在右侧\"字段\"面板拖入数据列或度量值");
         }
         const previewMsg: Message = {
