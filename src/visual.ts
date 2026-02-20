@@ -191,6 +191,7 @@ export class Visual implements IVisual {
         this.extractTableData(dataView);
         this.extractMeasures(dataView);
         this.extractDateRange(dataView);
+        this.prepareDataContext();   // 预计算数值统计摘要供 LLM 上下文使用
         this.updateContextBar();
     }
 
@@ -538,6 +539,12 @@ PowerBI专家：
             });
         }
 
+        // 数据概览统计摘要（由 prepareDataContext 预计算）
+        if (ctx.dataSummary) {
+            contextData += "\n【数据概览统计（预计算摘要，含各数值列汇总）】\n";
+            contextData += ctx.dataSummary + "\n";
+        }
+
         if (ctx.tableData && ctx.tableData.length > 0) {
             contextData += "\n【完整数据（共 " + ctx.dataRowCount + " 行）】\n";
             const cols = ctx.columnNames;
@@ -555,7 +562,87 @@ PowerBI专家：
 
         contextData += "\n=== 上下文结束 ===\n";
 
+        // ============================================================
+        // 每次提交数据上下文时强制附加的 HTML 格式指令（来自模板最佳实践）
+        // ============================================================
+        contextData += "\n【回复格式强制要求】\n";
+        contextData += "请基于提供的数据回答用户问题。如果是要求写报告、方案，请使用正规商业咨询报告格式（包含 <h3> 标题、详细章节等），确保美观精致；如果是正常交流，则保持简洁。\n";
+        contextData += "请务必使用HTML格式返回结果：\n";
+        contextData += "1. 使用<h3>、<h4>作为标题\n";
+        contextData += "2. 使用<table class=\"report-table\">显示表格\n";
+        contextData += "3. 使用<ul>、<ol>显示列表\n";
+        contextData += "4. 换行请使用 <br> 或 <p>\n";
+        contextData += "5. 重点内容使用<span class=\"report-emphasis\">加粗</span>\n";
+        contextData += "6. 不要使用Markdown格式，直接返回HTML代码。\n";
+
         return systemInstructions + contextData;
+    }
+
+    // ============================================================
+    // prepareDataContext：提取业务数据，生成 LLM 可读的数据概览摘要
+    // 价值：自动识别数值列并预计算 sum/avg/min/max，让大模型无需看原始数据
+    // 即可理解核心指标规模；同时区分维度字段与度量字段，降低幻觉概率。
+    // ============================================================
+    private prepareDataContext(): void {
+        const ctx = this.reportContext;
+        const data = ctx.tableData;
+
+        if (data.length === 0 || ctx.columnNames.length === 0) {
+            ctx.dataSummary = "";
+            return;
+        }
+
+        const lines: string[] = [];
+        lines.push(`数据规模：${ctx.dataRowCount} 行 × ${ctx.columnNames.length} 列`);
+
+        // 对前 100 行采样，自动识别数值列 vs 文本列
+        const sampleSize = Math.min(data.length, 100);
+        const sampleData = data.slice(0, sampleSize);
+        const numericCols: string[] = [];
+        const textCols: string[] = [];
+
+        ctx.columnNames.forEach(col => {
+            const vals = sampleData
+                .map(r => r[col])
+                .filter(v => v !== null && v !== undefined);
+            if (vals.length === 0) return;
+            const numCount = vals.filter(v =>
+                typeof v === "number" ||
+                (String(v).trim() !== "" && !isNaN(parseFloat(String(v))))
+            ).length;
+            if (numCount / vals.length >= 0.7) {
+                numericCols.push(col);
+            } else {
+                textCols.push(col);
+            }
+        });
+
+        if (textCols.length > 0) {
+            lines.push(`维度字段（${textCols.length} 个）：${textCols.join("、")}`);
+        }
+
+        if (numericCols.length > 0) {
+            lines.push(`数值字段统计（${numericCols.length} 个，基于全量数据）：`);
+            numericCols.forEach(col => {
+                const numVals = data
+                    .map(r => r[col])
+                    .filter(v => v !== null && v !== undefined)
+                    .map(v => Number(v))
+                    .filter(v => !isNaN(v));
+                if (numVals.length === 0) return;
+                const sum = numVals.reduce((a, b) => a + b, 0);
+                const avg = sum / numVals.length;
+                const min = Math.min(...numVals);
+                const max = Math.max(...numVals);
+                const fmt = (n: number) => n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+                lines.push(
+                    `  · ${col}：合计 ${fmt(sum)}，均值 ${fmt(avg)}，` +
+                    `最小 ${fmt(min)}，最大 ${fmt(max)}，计数 ${numVals.length}`
+                );
+            });
+        }
+
+        ctx.dataSummary = lines.join("\n");
     }
 
     // ============================================================
@@ -1296,6 +1383,76 @@ PowerBI专家：
      color: #6b7280;
      margin-top: 4px;
  }
+ /* ---- report-table：AI 返回报告时使用的标准表格样式 ---- */
+ .report-table {
+     border-collapse: collapse;
+     width: 100%;
+     margin: 10px 0;
+     font-size: 13px;
+     border-radius: 8px;
+     overflow: hidden;
+     box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+ }
+ .report-table thead tr {
+     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+     color: #fff;
+ }
+ .report-table th {
+     padding: 8px 12px;
+     text-align: left;
+     font-weight: 600;
+     font-size: 12px;
+     letter-spacing: 0.3px;
+ }
+ .report-table td {
+     padding: 7px 12px;
+     border-bottom: 1px solid #e8ecf4;
+     color: #374151;
+ }
+ .report-table tbody tr:last-child td {
+     border-bottom: none;
+ }
+ .report-table tbody tr:nth-child(even) {
+     background: #f8faff;
+ }
+ .report-table tbody tr:hover {
+     background: #eef2ff;
+ }
+ /* ---- report-emphasis：AI 返回内容中的重点高亮 ---- */
+ .report-emphasis {
+     font-weight: 700;
+     color: #4338ca;
+     background: #eef2ff;
+     padding: 1px 5px;
+     border-radius: 4px;
+ }
+ /* ---- copy-btn：消息气泡右侧的复制按钮 ---- */
+ .copy-btn {
+     display: inline-flex;
+     align-items: center;
+     justify-content: center;
+     margin-left: 8px;
+     padding: 2px 6px;
+     border: 1px solid #d1d5db;
+     border-radius: 5px;
+     background: transparent;
+     color: #9ca3af;
+     font-size: 13px;
+     cursor: pointer;
+     vertical-align: middle;
+     transition: all 0.18s;
+     line-height: 1;
+ }
+ .copy-btn:hover {
+     background: #f0f4ff;
+     border-color: #667eea;
+     color: #667eea;
+ }
+ .copy-btn.copied {
+     background: #ecfdf5;
+     border-color: #34d399;
+     color: #059669;
+ }
  `;
         document.head.appendChild(style);
     }
@@ -1542,7 +1699,7 @@ PowerBI专家：
             return "<p>没有找到符合条件的数据。</p>";
         }
         let html = "<div class=\"query-result\">";
-        html += "<table class=\"query-result-table\"><thead><tr>";
+        html += "<table class=\"report-table\"><thead><tr>";
         result.columns.forEach(col => {
             html += "<th>" + this.escapeHtml(col) + "</th>";
         });
@@ -1822,6 +1979,26 @@ PowerBI专家：
         timeDiv.textContent = time;
         messageDiv.appendChild(bubbleDiv);
         messageDiv.appendChild(timeDiv);
+
+        // 为 bot 消息添加复制按钮（调用 copyToClipboard 支持 HTML 富文本）
+        if (!message.isUser) {
+            const copyBtn = document.createElement("button");
+            copyBtn.type = "button";
+            copyBtn.className = "copy-btn";
+            copyBtn.title = "复制内容";
+            copyBtn.innerHTML = "&#x2398;";
+            copyBtn.addEventListener("click", async () => {
+                await this.copyToClipboard(bubbleDiv.innerHTML, bubbleDiv.textContent || "");
+                copyBtn.classList.add("copied");
+                copyBtn.innerHTML = "✓";
+                setTimeout(() => {
+                    copyBtn.classList.remove("copied");
+                    copyBtn.innerHTML = "&#x2398;";
+                }, 2000);
+            });
+            timeDiv.appendChild(copyBtn);
+        }
+
         this.messagesContainer.appendChild(messageDiv);
         this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
     }
@@ -1984,6 +2161,61 @@ PowerBI专家：
                 console.error("清理历史失败:", e);
             }
         }, 60000);
+    }
+
+    // ============================================================
+    // copyToClipboard：现代与兼容并存的"复制到剪贴板"
+    // 价值：优先使用 navigator.clipboard.write（支持复制 HTML 富文本），
+    // 同时提供优雅回退（fallback）：利用屏幕外可编辑 div + execCommand，
+    // 确保老版本浏览器（如 Power BI 内嵌 WebView）也能正常使用。
+    // ============================================================
+    private async copyToClipboard(html: string, plainText: string): Promise<void> {
+        try {
+            if (
+                typeof navigator !== "undefined" &&
+                navigator.clipboard &&
+                typeof (navigator.clipboard as any).write === "function"
+            ) {
+                const htmlBlob = new Blob([html], { type: "text/html" });
+                const textBlob = new Blob([plainText], { type: "text/plain" });
+                await (navigator.clipboard as any).write([
+                    new (window as any).ClipboardItem({
+                        "text/html": htmlBlob,
+                        "text/plain": textBlob
+                    })
+                ]);
+            } else {
+                this.fallbackCopyToClipboard(html);
+            }
+        } catch (e) {
+            // 现代 API 失败（如权限被拒），降级到 execCommand 方案
+            this.fallbackCopyToClipboard(plainText);
+        }
+    }
+
+    // ============================================================
+    // fallbackCopyToClipboard：execCommand 兼容方案
+    // 创建一个绝对定位在屏幕外的可编辑 div，
+    // 设置 innerHTML 后用 selection + execCommand("copy") 完成复制。
+    // ============================================================
+    private fallbackCopyToClipboard(content: string): void {
+        const el = document.createElement("div");
+        el.contentEditable = "true";
+        el.innerHTML = content;
+        el.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;pointer-events:none;";
+        document.body.appendChild(el);
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        try {
+            document.execCommand("copy");
+        } catch (e) {
+            console.warn("复制到剪贴板失败:", e);
+        }
+        selection?.removeAllRanges();
+        document.body.removeChild(el);
     }
 
     public destroy(): void {
