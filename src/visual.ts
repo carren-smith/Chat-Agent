@@ -95,6 +95,9 @@ export class Visual implements IVisual {
     private contextBar: HTMLElement;
     private llmProviders: LLMProvider[];
     private suggestedQuestions: string[];
+    private isGenerating: boolean;
+    private abortController: AbortController | null;
+    private charts: Map<string, any>;
 
     constructor(options: VisualConstructorOptions) {
         this.target = options.element;
@@ -153,6 +156,9 @@ export class Visual implements IVisual {
             "帮我分析当前数据",
             "有哪些异常数据？"
         ];
+        this.isGenerating = false;
+        this.abortController = null;
+        this.charts = new Map();
         this.messages = [];
         this.loadChatHistory();
         this.createUI();
@@ -191,7 +197,6 @@ export class Visual implements IVisual {
         this.extractTableData(dataView);
         this.extractMeasures(dataView);
         this.extractDateRange(dataView);
-        this.prepareDataContext();   // 预计算数值统计摘要供 LLM 上下文使用
         this.updateContextBar();
     }
 
@@ -414,8 +419,6 @@ export class Visual implements IVisual {
     // 每次调用都会读取 this.reportContext 的最新状态，保证筛选器实时性
     // ============================================================
     private buildSystemPrompt(): string {
-        const ctx = this.reportContext;
-
         const systemInstructions = `你是"powerbi pro打造的Chat Agent"，是一位由powerbi pro打造的AI，在数据领域拥有三位一体的专家身份：PowerBI专家、数据分析专家、数据可视化专家。你的使命是成为每一位用户身边触手可及的资深数据顾问，帮助用户从数据中挖掘价值，提升决策能力。
 
 【核心要求】
@@ -502,147 +505,115 @@ PowerBI专家：
 
 请用中文回答问题，并提供有用的数据洞察。`;
 
-        // ============================================================
-        // 动态注入 Power BI 实时数据上下文
-        // 每次 sendMessage() 调用时实时读取 this.reportContext，保证最新
-        // ============================================================
-        let contextData = "\n\n=== Power BI 实时数据上下文（本次提问时实时生成，请以此为准，忽略历史对话中的旧数据快照）===\n";
-
-        contextData += "报表页面：" + (ctx.pageName || "未知页面") + "\n";
-        contextData += "数据更新时间：" + (ctx.lastUpdated || "未知，请勿假设数据为实时数据") + "\n";
-        contextData += "数据总行数：" + ctx.dataRowCount + " 行\n";
-
-        if (ctx.dateRange) {
-            contextData += "数据日期范围：" + ctx.dateRange + "\n";
-        }
-
-        if (ctx.filters && ctx.filters.length > 0) {
-            contextData += "\n【当前筛选器状态（实时）】（分析结论必须限定在此范围内，不得泛化到全局）\n";
-            ctx.filters.forEach(f => {
-                contextData += "- " + f.table + "." + f.column + " = " + f.values.join("、") + "\n";
-            });
-        } else {
-            contextData += "\n【当前筛选器状态（实时）】无筛选条件，分析全量数据\n";
-        }
-
-        if (ctx.columnNames && ctx.columnNames.length > 0) {
-            contextData += "\n【数据字段列表】\n";
-            ctx.columnNames.forEach(col => {
-                contextData += "- " + col + "\n";
-            });
-        }
-
-        if (ctx.measures && ctx.measures.length > 0) {
-            contextData += "\n【关键统计指标】（参考库，按需引用，严禁全部列出，严禁对比率类字段求和）\n";
-            ctx.measures.forEach(m => {
-                contextData += "- " + m.name + "：" + m.formattedValue + "\n";
-            });
-        }
-
-        // 数据概览统计摘要（由 prepareDataContext 预计算）
-        if (ctx.dataSummary) {
-            contextData += "\n【数据概览统计（预计算摘要，含各数值列汇总）】\n";
-            contextData += ctx.dataSummary + "\n";
-        }
-
-        if (ctx.tableData && ctx.tableData.length > 0) {
-            contextData += "\n【完整数据（共 " + ctx.dataRowCount + " 行）】\n";
-            const cols = ctx.columnNames;
-            contextData += cols.join("\t") + "\n";
-            ctx.tableData.forEach(row => {
-                const vals = cols.map(c => {
-                    const v = row[c];
-                    return (v === null || v === undefined) ? "" : String(v);
-                });
-                contextData += vals.join("\t") + "\n";
-            });
-        } else {
-            contextData += "\n【数据】当前页面未绑定数据字段，请提示用户在右侧字段面板拖入数据列或度量值后再进行分析。\n";
-        }
-
-        contextData += "\n=== 上下文结束 ===\n";
-
-        // ============================================================
-        // 每次提交数据上下文时强制附加的 HTML 格式指令（来自模板最佳实践）
-        // ============================================================
-        contextData += "\n【回复格式强制要求】\n";
-        contextData += "请基于提供的数据回答用户问题。如果是要求写报告、方案，请使用正规商业咨询报告格式（包含 <h3> 标题、详细章节等），确保美观精致；如果是正常交流，则保持简洁。\n";
-        contextData += "请务必使用HTML格式返回结果：\n";
-        contextData += "1. 使用<h3>、<h4>作为标题\n";
-        contextData += "2. 使用<table class=\"report-table\">显示表格\n";
-        contextData += "3. 使用<ul>、<ol>显示列表\n";
-        contextData += "4. 换行请使用 <br> 或 <p>\n";
-        contextData += "5. 重点内容使用<span class=\"report-emphasis\">加粗</span>\n";
-        contextData += "6. 不要使用Markdown格式，直接返回HTML代码。\n";
-
-        return systemInstructions + contextData;
+        // 系统提示词只包含静态角色定义，不含动态数据上下文。
+        // 数据上下文与格式指令由 buildFinalUserPrompt() 在每次请求时动态注入。
+        return systemInstructions;
     }
 
     // ============================================================
-    // prepareDataContext：提取业务数据，生成 LLM 可读的数据概览摘要
-    // 价值：自动识别数值列并预计算 sum/avg/min/max，让大模型无需看原始数据
-    // 即可理解核心指标规模；同时区分维度字段与度量字段，降低幻觉概率。
+    // prepareDataContext：生成完整的数据上下文字符串，供每次请求时注入到 finalPrompt。
+    // 参考模板 prepareDataContext 逻辑：
+    //   1. 列名、行数等结构信息
+    //   2. 自动识别比率指标（format 含 %），数值列只计算总计
+    //   3. 附加筛选器状态（告知 AI 当前分析范围）
+    //   4. 完整数据行，每个单元格经 formatCellValue 处理
     // ============================================================
-    private prepareDataContext(): void {
+    private prepareDataContext(): string {
         const ctx = this.reportContext;
         const data = ctx.tableData;
+        const cols = ctx.columnNames;
 
-        if (data.length === 0 || ctx.columnNames.length === 0) {
-            ctx.dataSummary = "";
-            return;
+        // 筛选器状态始终注入，让 AI 知道当前分析范围
+        let result = "";
+
+        if (ctx.filters && ctx.filters.length > 0) {
+            result += "【当前筛选器状态】（分析结论必须限定在此范围内，不得泛化到全局）\n";
+            ctx.filters.forEach(f => {
+                result += `- ${f.table}.${f.column} = ${f.values.join("、")}\n`;
+            });
+            result += "\n";
+        } else {
+            result += "【当前筛选器状态】无筛选条件，分析全量数据\n\n";
         }
 
-        const lines: string[] = [];
-        lines.push(`数据规模：${ctx.dataRowCount} 行 × ${ctx.columnNames.length} 列`);
+        if (data.length === 0 || cols.length === 0) {
+            result += "数据表为空，请提示用户在右侧字段面板拖入数据列或度量值。";
+            return result;
+        }
 
-        // 对前 100 行采样，自动识别数值列 vs 文本列
-        const sampleSize = Math.min(data.length, 100);
-        const sampleData = data.slice(0, sampleSize);
-        const numericCols: string[] = [];
-        const textCols: string[] = [];
+        result += "数据概览：\n";
+        result += `- 列数：${cols.length}\n`;
+        result += `- 行数：${data.length}\n`;
+        result += `- 列名：${cols.join(", ")}\n\n`;
 
-        ctx.columnNames.forEach(col => {
-            const vals = sampleData
-                .map(r => r[col])
-                .filter(v => v !== null && v !== undefined);
-            if (vals.length === 0) return;
-            const numCount = vals.filter(v =>
-                typeof v === "number" ||
-                (String(v).trim() !== "" && !isNaN(parseFloat(String(v))))
-            ).length;
-            if (numCount / vals.length >= 0.7) {
-                numericCols.push(col);
+        // 识别度量值信息（含比率标记）
+        const measureStats: string[] = [];
+        ctx.measures.forEach(m => {
+            if (m.value === null) return;
+            const isRatio = (m.formattedValue || "").includes("%");
+            if (isRatio) {
+                measureStats.push(`- ${m.name}: [比率指标] ${m.formattedValue} (不可直接汇总)`);
             } else {
-                textCols.push(col);
+                measureStats.push(`- ${m.name}: 总计=${m.formattedValue}`);
             }
         });
 
-        if (textCols.length > 0) {
-            lines.push(`维度字段（${textCols.length} 个）：${textCols.join("、")}`);
+        // 对数值列（非度量值）计算总计
+        const sampleRows = data.slice(0, Math.min(data.length, 5));
+        cols.forEach(col => {
+            // 若已在 measures 中有记录则跳过
+            if (ctx.measures.some(m => m.name === col)) return;
+            const sampleVals = sampleRows.map(r => r[col]).filter(v => v !== null && v !== undefined);
+            if (sampleVals.length === 0) return;
+            const numCount = sampleVals.filter(v => typeof v === "number").length;
+            if (numCount / sampleVals.length >= 0.5) {
+                let total = 0;
+                data.forEach(row => {
+                    const v = row[col];
+                    if (typeof v === "number") total += v;
+                });
+                measureStats.push(`- ${col}: 总计=${this.formatCellValue(total)}`);
+            }
+        });
+
+        if (measureStats.length > 0) {
+            result += "【关键统计指标（已复核，请直接引用）】：\n";
+            result += measureStats.join("\n") + "\n\n";
         }
 
-        if (numericCols.length > 0) {
-            lines.push(`数值字段统计（${numericCols.length} 个，基于全量数据）：`);
-            numericCols.forEach(col => {
-                const numVals = data
-                    .map(r => r[col])
-                    .filter(v => v !== null && v !== undefined)
-                    .map(v => Number(v))
-                    .filter(v => !isNaN(v));
-                if (numVals.length === 0) return;
-                const sum = numVals.reduce((a, b) => a + b, 0);
-                const avg = sum / numVals.length;
-                const min = Math.min(...numVals);
-                const max = Math.max(...numVals);
-                const fmt = (n: number) => n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
-                lines.push(
-                    `  · ${col}：合计 ${fmt(sum)}，均值 ${fmt(avg)}，` +
-                    `最小 ${fmt(min)}，最大 ${fmt(max)}，计数 ${numVals.length}`
-                );
-            });
-        }
+        // 完整数据行
+        result += "完整数据内容：\n";
+        data.forEach((row, idx) => {
+            const rowStr = cols.map(c => `${c}: ${this.formatCellValue(row[c])}`).join(", ");
+            result += `${idx + 1}. ${rowStr}\n`;
+        });
 
-        ctx.dataSummary = lines.join("\n");
+        return result;
+    }
+
+    // ============================================================
+    // buildFinalUserPrompt：每次用户发送消息时，静默组装发往后台的完整 prompt。
+    // 参考模板 callAIAPIWithStreaming 中的 finalPrompt 构建逻辑：
+    //   finalPrompt = 数据上下文 + 用户原始问题 + HTML 格式强制指令
+    // UI 侧只显示 userText（保持界面干净），不暴露注入内容。
+    // ============================================================
+    private buildFinalUserPrompt(userText: string): string {
+        const dataCtx = this.prepareDataContext();
+        if (!dataCtx) {
+            return userText;
+        }
+        return (
+            `数据上下文：\n${dataCtx}\n\n` +
+            `用户问题：${userText}\n\n` +
+            `请基于提供的数据回答用户问题。如果是要求写报告、方案，请使用正规商业咨询报告格式（包含 <h3> 标题、详细章节等），确保美观精致；如果是正常交流，则保持简洁。\n` +
+            `请务必使用HTML格式返回结果：\n` +
+            `1. 使用<h3>、<h4>作为标题\n` +
+            `2. 使用<table class="report-table">显示表格\n` +
+            `3. 使用<ul>、<ol>显示列表\n` +
+            `4. 换行请使用 <br> 或 <p>\n` +
+            `5. 重点内容使用<span class="report-emphasis">加粗</span>\n` +
+            `6. 不要使用Markdown格式，直接返回HTML代码。`
+        );
     }
 
     // ============================================================
@@ -802,7 +773,11 @@ PowerBI专家：
         this.sendButton.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
-            this.sendMessage();
+            if (this.isGenerating) {
+                this.stopGeneration();
+            } else {
+                this.sendMessage();
+            }
         });
         this.inputContainer.appendChild(this.inputField);
         this.inputContainer.appendChild(this.sendButton);
@@ -1210,6 +1185,18 @@ PowerBI专家：
  box-shadow: none;
  transform: none;
  }
+ .send-button.generating {
+ background: #ef4444;
+ box-shadow: 0 3px 10px rgba(239, 68, 68, 0.35);
+ animation: pulse-red 1.4s infinite;
+ }
+ .send-button.generating:hover {
+ background: #dc2626;
+ }
+ @keyframes pulse-red {
+ 0%, 100% { box-shadow: 0 3px 10px rgba(239, 68, 68, 0.35); }
+ 50% { box-shadow: 0 3px 18px rgba(239, 68, 68, 0.6); }
+ }
  .settings-modal {
  position: absolute;
  top: 0;
@@ -1469,86 +1456,117 @@ PowerBI专家：
     }
 
     // ============================================================
-    // sendMessage
+    // sendMessage：完整重构，参考模板 sendMessage + callAIAPIWithStreaming 设计
     //
-    // 【筛选器实时性修复核心】
-    // 问题根因：历史消息里的 assistant 回复包含了上一轮的完整数据分析结论
-    // （含旧筛选器状态），LLM 看到这些历史内容后会倾向复用旧结论，
-    // 而不是重新读取 system prompt 里的最新数据。
-    //
-    // 修复方案：历史消息只传用户侧问题（不传 assistant 旧回复），
-    // 最新数据和筛选器状态仅通过 system prompt 注入，每次发送时实时构建。
-    // LLM 因此每次都只能依赖当次 system prompt 中的实时数据作答。
+    // 核心三原则：
+    // 1. 用户感知隔离：UI 只展示用户输入的原始文字，保持界面干净
+    // 2. 静默 Prompt 注入：调用 API 前用 buildFinalUserPrompt() 静默封装
+    //    数据上下文 + 筛选器状态 + HTML 格式指令，发往后台
+    // 3. 渲染修正：流式 chunk 和最终结果均经 formatContentForDisplay()
+    //    清洗，防止 ```html 等 Markdown 标记泄漏到 UI
     // ============================================================
     private async sendMessage(): Promise<void> {
-        const text = this.inputField.value.trim();
-        if (!text) return;
+        if (this.isGenerating) return;  // 防止重复提交
+
+        const userText = this.inputField.value.trim();
+        if (!userText) return;
         if (!this.settings.apiKey) {
             this.showError("请先在设置中配置 API Key");
             return;
         }
 
-        const userMessage: Message = {
-            text: text,
-            isUser: true,
-            timestamp: new Date()
-        };
+        // ① UI 只显示原始用户文字（不暴露注入内容）
+        const userMessage: Message = { text: userText, isUser: true, timestamp: new Date() };
         this.messages.push(userMessage);
         this.renderMessage(userMessage);
         this.saveChatHistory();
         this.inputField.value = "";
-        this.sendButton.disabled = true;
 
-        const botMessage: Message = {
-            text: "",
-            isUser: false,
-            timestamp: new Date()
-        };
+        // ② 进入生成状态
+        this.isGenerating = true;
+        this.abortController = new AbortController();
+        this.updateSendButtonState();
+
+        // ③ 静默构建 finalPrompt（含数据上下文 + HTML 格式指令）
+        const finalPrompt = this.buildFinalUserPrompt(userText);
+        const systemPrompt = this.buildSystemPrompt();
+
+        // ④ 创建流式 Bot 消息气泡
+        const botMessage: Message = { text: "", isUser: false, timestamp: new Date() };
         this.messages.push(botMessage);
         this.renderMessage(botMessage);
-
         const lastMsgDiv = this.messagesContainer.lastElementChild as HTMLElement;
         const bubbleDiv = lastMsgDiv.querySelector(".message-bubble") as HTMLElement;
 
-        // 【修复】onChunk 直接用 innerHTML，不经 renderMarkdown（避免转义 HTML 标签）
+        // ⑤ 流式 chunk 回调：实时清洗后渲染，检测 data_query 流式中间态
+        const rawChunks: string[] = [];
         const onChunk = (chunk: string) => {
-            botMessage.text += chunk;
-            bubbleDiv.innerHTML = botMessage.text;
+            rawChunks.push(chunk);
+            const accumulated = rawChunks.join("");
+            // 若正在流式接收 JSON 块（data_query），显示"正在查询"提示
+            const jsonStart = accumulated.indexOf("```json");
+            const jsonEnd = accumulated.indexOf("```", jsonStart + 7);
+            if (jsonStart !== -1 && jsonEnd === -1) {
+                // JSON 块未闭合，正在流式接收中
+                const beforeJson = this.formatContentForDisplay(accumulated.substring(0, jsonStart));
+                bubbleDiv.innerHTML = beforeJson +
+                    '<div style="color:#667eea;font-style:italic;margin:8px 0;">' +
+                    '<span>⏳ 正在查询数据...</span></div>';
+            } else {
+                bubbleDiv.innerHTML = this.formatContentForDisplay(accumulated);
+            }
             this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
         };
 
         try {
-            // 每次发送时实时构建，注入最新筛选器和数据上下文
-            const systemPrompt = this.buildSystemPrompt();
-
-            let fullAnswer = "";
             const provider = this.settings.llmProvider;
+            let fullAnswer = "";
+
             if (provider === "openai" || provider === "deepseek") {
-                fullAnswer = await this.streamOpenAI(text, systemPrompt, onChunk);
+                fullAnswer = await this.streamOpenAI(finalPrompt, systemPrompt, onChunk);
             } else if (provider === "gemini") {
-                fullAnswer = await this.streamGemini(text, systemPrompt, onChunk);
+                fullAnswer = await this.streamGemini(finalPrompt, systemPrompt, onChunk);
             } else if (provider === "custom") {
-                fullAnswer = await this.streamCustom(text, systemPrompt, onChunk);
+                fullAnswer = await this.streamCustom(finalPrompt, systemPrompt, onChunk);
             } else {
                 throw new Error("不支持的提供商");
             }
 
-            // 【修复执行顺序】先清除 JSON 块再渲染，用户不会看到原始 JSON
-            const cleanedText = this.removeJsonCodeBlocks(fullAnswer);
-            botMessage.text = cleanedText;
-            bubbleDiv.innerHTML = cleanedText;
+            // ⑥ 最终渲染：完整清洗一次，处理 data_query JSON 指令
+            const finalHtml = this.formatContentForDisplay(fullAnswer);
+            botMessage.text = finalHtml;
+            bubbleDiv.innerHTML = finalHtml;
             this.saveChatHistory();
 
-            // 再执行 JSON 指令（结果以新消息气泡追加）
-            await this.processJsonCommands(fullAnswer);
+            // ⑦ 图表检测：若用户要求图表且有数据，渲染图表
+            if (this.shouldGenerateChart(userText)) {
+                const chartData = this.generateChartFromData(userText);
+                if (chartData) {
+                    const chartContainer = document.createElement("div");
+                    chartContainer.style.cssText = "height:220px;margin-top:10px;";
+                    const canvas = document.createElement("canvas");
+                    canvas.id = "chart_" + Date.now();
+                    chartContainer.appendChild(canvas);
+                    bubbleDiv.appendChild(chartContainer);
+                    setTimeout(() => this.renderChart(canvas, chartData), 100);
+                }
+            }
 
-        } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : String(error);
-            botMessage.text = "请求失败：" + errorMsg;
-            bubbleDiv.innerHTML = this.renderMarkdown(botMessage.text);
+        } catch (error: any) {
+            if (error?.name === "AbortError") {
+                // 用户主动停止
+                botMessage.text = botMessage.text || "<p>已停止生成。</p>";
+                bubbleDiv.innerHTML = botMessage.text;
+            } else {
+                const errMsg = error instanceof Error ? error.message : String(error);
+                botMessage.text = `<p style="color:#ef4444;">请求失败：${this.formatCellValue(errMsg)}</p>`;
+                bubbleDiv.innerHTML = botMessage.text;
+            }
             this.saveChatHistory();
         } finally {
-            this.sendButton.disabled = false;
+            this.isGenerating = false;
+            this.abortController = null;
+            this.updateSendButtonState();
         }
     }
 
@@ -1701,16 +1719,13 @@ PowerBI专家：
         let html = "<div class=\"query-result\">";
         html += "<table class=\"report-table\"><thead><tr>";
         result.columns.forEach(col => {
-            html += "<th>" + this.escapeHtml(col) + "</th>";
+            html += "<th>" + this.formatCellValue(col) + "</th>";
         });
         html += "</tr></thead><tbody>";
         result.rows.forEach(row => {
             html += "<tr>";
             result.columns.forEach(col => {
-                let val = row[col];
-                if (val === null || val === undefined) val = "";
-                if (typeof val === "number") val = val.toLocaleString("zh-CN");
-                html += "<td>" + this.escapeHtml(String(val)) + "</td>";
+                html += "<td>" + this.formatCellValue(row[col]) + "</td>";
             });
             html += "</tr>";
         });
@@ -1725,21 +1740,23 @@ PowerBI专家：
     // 【修复历史消息策略】只传用户侧历史问题，不传 assistant 旧回复
     // 防止 LLM 从历史 assistant 消息中读取旧的数据快照
     // ============================================================
-    private async streamOpenAI(userMessage: string, systemPrompt: string, onChunk: (chunk: string) => void): Promise<string> {
+    // finalPrompt 已由 buildFinalUserPrompt() 静默封装数据上下文，
+    // history 只传原始用户文字（不含数据上下文，防止上下文污染）
+    private async streamOpenAI(finalPrompt: string, systemPrompt: string, onChunk: (chunk: string) => void): Promise<string> {
         const apiUrl = this.settings.apiEndpoint || "https://api.openai.com/v1/chat/completions";
 
+        // 历史消息：排除当前 userMsg（倒数第2）和空 botMsg（倒数第1），只取用户侧原始文字
         const historyMessages: Array<{ role: string; content: string }> = [];
-        const recentMsgs = this.messages.slice(-10);
+        const recentMsgs = this.messages.slice(-12, -2);  // 不含当前轮次
         recentMsgs.forEach(m => {
-            if (!m.isUser) return;          // 不传 assistant 历史回复
-            if (m.text === userMessage) return; // 不传当前发送的消息（末尾单独附加）
+            if (!m.isUser) return;  // 只传用户历史，不传 assistant 回复（防旧数据污染）
             historyMessages.push({ role: "user", content: m.text });
         });
 
         const requestMessages = [
             { role: "system", content: systemPrompt },
             ...historyMessages,
-            { role: "user", content: userMessage }
+            { role: "user", content: finalPrompt }  // 当前轮注入完整 finalPrompt
         ];
 
         const requestBody = {
@@ -1755,7 +1772,8 @@ PowerBI专家：
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + this.settings.apiKey
             },
-            body: JSON.stringify(requestBody)
+            body: JSON.stringify(requestBody),
+            signal: this.abortController?.signal
         });
 
         if (!response.ok) {
@@ -1800,20 +1818,21 @@ PowerBI专家：
     // ============================================================
     // streamGemini
     // ============================================================
-    private async streamGemini(userMessage: string, systemPrompt: string, onChunk: (chunk: string) => void): Promise<string> {
+    private async streamGemini(finalPrompt: string, systemPrompt: string, onChunk: (chunk: string) => void): Promise<string> {
         const baseUrl = this.settings.apiEndpoint || "https://generativelanguage.googleapis.com";
         const modelPath = this.settings.modelName.startsWith("models/") ? this.settings.modelName : ("models/" + this.settings.modelName);
         const apiUrl = baseUrl + "/" + modelPath + ":streamGenerateContent?key=" + this.settings.apiKey + "&alt=sse";
 
         const requestBody = {
             systemInstruction: { parts: [{ text: systemPrompt }] },
-            contents: [{ parts: [{ text: userMessage }] }]
+            contents: [{ parts: [{ text: finalPrompt }] }]
         };
 
         const response = await fetch(apiUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(requestBody)
+            body: JSON.stringify(requestBody),
+            signal: this.abortController?.signal
         });
 
         if (!response.ok) {
@@ -1854,7 +1873,7 @@ PowerBI专家：
     // ============================================================
     // streamCustom（兼容 OpenAI 格式）
     // ============================================================
-    private async streamCustom(userMessage: string, systemPrompt: string, onChunk: (chunk: string) => void): Promise<string> {
+    private async streamCustom(finalPrompt: string, systemPrompt: string, onChunk: (chunk: string) => void): Promise<string> {
         if (!this.settings.apiEndpoint) {
             throw new Error("请在设置中填写自定义 API 端点");
         }
@@ -1864,17 +1883,16 @@ PowerBI专家：
         }
 
         const historyMessages: Array<{ role: string; content: string }> = [];
-        const recentMsgs = this.messages.slice(-10);
+        const recentMsgs = this.messages.slice(-12, -2);  // 排除当前轮次
         recentMsgs.forEach(m => {
             if (!m.isUser) return;
-            if (m.text === userMessage) return;
             historyMessages.push({ role: "user", content: m.text });
         });
 
         const requestMessages = [
             { role: "system", content: systemPrompt },
             ...historyMessages,
-            { role: "user", content: userMessage }
+            { role: "user", content: finalPrompt }
         ];
 
         const requestBody = {
@@ -1890,7 +1908,8 @@ PowerBI专家：
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + this.settings.apiKey
             },
-            body: JSON.stringify(requestBody)
+            body: JSON.stringify(requestBody),
+            signal: this.abortController?.signal
         });
 
         if (!response.ok) {
@@ -2161,6 +2180,225 @@ PowerBI专家：
                 console.error("清理历史失败:", e);
             }
         }, 60000);
+    }
+
+    // ============================================================
+    // formatCellValue：统一的单元格值格式化
+    // 参考模板 formatCellValue(t)：
+    //   null/undefined → ""；number → toLocaleString()；
+    //   string → HTML 转义（防 XSS）
+    // ============================================================
+    private formatCellValue(val: any): string {
+        if (val === null || val === undefined) return "";
+        if (typeof val === "number") return val.toLocaleString("zh-CN");
+        return String(val)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    // ============================================================
+    // sanitizeHTML：基于白名单的 HTML 清洗
+    // 参考模板 sanitizeHTML(t)：
+    //   使用 DOMParser 解析，只保留安全标签和属性，
+    //   防止 AI 返回含脚本或危险属性的内容被直接渲染。
+    // ============================================================
+    private sanitizeHTML(html: string): string {
+        try {
+            const parsed = (new DOMParser()).parseFromString(html, "text/html");
+            const allowedTags = new Set([
+                "h3", "h4", "p", "br", "div", "span",
+                "table", "thead", "tbody", "tr", "th", "td",
+                "ul", "ol", "li", "b", "strong", "i", "em", "u"
+            ]);
+            const allowedAttrs = ["class", "style", "rowspan", "colspan", "width", "height", "align"];
+
+            const clean = (node: Node): void => {
+                if (node.nodeType === Node.TEXT_NODE) return;
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    const el = node as Element;
+                    const tag = el.tagName.toLowerCase();
+                    if (!allowedTags.has(tag)) {
+                        el.remove();
+                        return;
+                    }
+                    // 移除非白名单属性
+                    Array.from(el.attributes).forEach(attr => {
+                        if (!allowedAttrs.includes(attr.name.toLowerCase())) {
+                            el.removeAttribute(attr.name);
+                        }
+                    });
+                    Array.from(el.childNodes).forEach(child => clean(child));
+                } else {
+                    node.parentNode?.removeChild(node);
+                }
+            };
+
+            Array.from(parsed.body.childNodes).forEach(node => clean(node));
+            return parsed.body.innerHTML;
+        } catch (e) {
+            console.warn("sanitizeHTML failed, escaping plain text:", e);
+            return html.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+    }
+
+    // ============================================================
+    // formatContentForDisplay：流式渲染 & 最终渲染的统一入口
+    // 参考模板 formatContentForDisplay(t)：
+    //   1. 剥离 ```html ... ``` 和 ``` ... ``` Markdown 包装
+    //   2. 调用 sanitizeHTML 保证安全
+    //   同时处理 data_query JSON 块：交给 formatToReportStyle 解析
+    // ============================================================
+    private formatContentForDisplay(content: string): string {
+        if (!content) return "";
+        // 检测并处理 data_query JSON 指令块
+        const jsonMatch = content.match(/```json\s*(\{\s*"intent"\s*:\s*"data_query"[\s\S]*?\})\s*```/);
+        if (jsonMatch) {
+            try {
+                const before = content.substring(0, jsonMatch.index!);
+                const after = content.substring(jsonMatch.index! + jsonMatch[0].length);
+                const query: DataQuery = JSON.parse(jsonMatch[1]);
+                const queryResult = this.executeDataQuery(query);
+                const resultHtml = this.formatQueryResult(queryResult, query);
+                return this.sanitizeHTML(this.stripMarkdownWrapper(before)) +
+                    resultHtml +
+                    this.sanitizeHTML(this.stripMarkdownWrapper(after));
+            } catch (e) {
+                console.error("formatContentForDisplay: failed to parse data_query", e);
+            }
+        }
+        return this.sanitizeHTML(this.stripMarkdownWrapper(content));
+    }
+
+    // ============================================================
+    // updateSendButtonState：根据 isGenerating 切换发送按钮的 UI 状态
+    // 生成中：显示"停止"图标 + generating 样式；空闲：恢复"发送"图标
+    // ============================================================
+    private updateSendButtonState(): void {
+        if (!this.sendButton) return;
+        if (this.isGenerating) {
+            this.sendButton.innerHTML = "⏹";
+            this.sendButton.title = "停止生成";
+            this.sendButton.classList.add("generating");
+        } else {
+            this.sendButton.innerHTML = "→";
+            this.sendButton.title = "发送";
+            this.sendButton.classList.remove("generating");
+        }
+    }
+
+    // ============================================================
+    // stopGeneration：中断当前 API 流式请求
+    // 参考模板 stopGeneration()：abort AbortController 信号
+    // ============================================================
+    private stopGeneration(): void {
+        if (this.abortController) {
+            this.abortController.abort();
+            this.abortController = null;
+        }
+        this.isGenerating = false;
+        this.updateSendButtonState();
+    }
+
+    // ============================================================
+    // shouldGenerateChart：检测用户是否有生成图表的意图
+    // 参考模板 shouldGenerateChart(t)：关键词列表匹配
+    // ============================================================
+    private shouldGenerateChart(userText: string): boolean {
+        const keywords = [
+            "生成图表", "创建图表", "画图表", "制作图表", "显示图表", "绘制图表",
+            "画个图表", "做个图表", "来个图表", "要个图表",
+            "画柱状图", "画折线图", "画饼图", "做柱状图", "做折线图", "做饼图",
+            "生成柱状图", "生成折线图", "生成饼图", "创建柱状图", "创建折线图", "创建饼图",
+            "用图表显示", "用图表展示", "图表展示", "图表呈现"
+        ];
+        return keywords.some(kw => userText.includes(kw));
+    }
+
+    // ============================================================
+    // generateChartFromData：从当前数据构建 Chart.js 配置对象
+    // 参考模板 generateChartFromData(t)：
+    //   取第一列作为标签（labels），第二列作为数值（data）；
+    //   根据关键词自动判断图表类型（bar/line/pie/doughnut）。
+    // ============================================================
+    private generateChartFromData(userText: string): any {
+        const data = this.reportContext.tableData;
+        const cols = this.reportContext.columnNames;
+        if (data.length === 0 || cols.length < 2) return null;
+
+        const labels = data.map(row => this.formatCellValue(row[cols[0]]));
+        const values = data.map(row => {
+            const v = row[cols[1]];
+            return typeof v === "number" ? v : 0;
+        });
+
+        let chartType: "bar" | "line" | "pie" | "doughnut" = "bar";
+        if (userText.includes("折线") || userText.includes("趋势")) chartType = "line";
+        else if (userText.includes("饼图")) chartType = "pie";
+        else if (userText.includes("环形")) chartType = "doughnut";
+
+        return {
+            type: chartType,
+            data: {
+                labels,
+                datasets: [{
+                    label: cols[1] || "数据",
+                    data: values,
+                    backgroundColor: [
+                        "#667eea", "#764ba2", "#36A2EB", "#FFCE56",
+                        "#4BC0C0", "#FF9F40", "#FF6384", "#C9CBCF"
+                    ],
+                    borderColor: "#667eea",
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: chartType === "pie" || chartType === "doughnut" } }
+            }
+        };
+    }
+
+    // ============================================================
+    // renderChart：将 Chart.js 配置渲染到 canvas 元素
+    // 参考模板 renderChart(t, e)：先销毁旧实例防止内存泄漏，
+    // 再用 Chart.js 构造新图表。若未引入 Chart.js 则优雅降级。
+    // ============================================================
+    private renderChart(canvas: HTMLCanvasElement, chartData: any): void {
+        try {
+            // 销毁旧实例防止内存泄漏
+            const existing = this.charts.get(canvas.id);
+            if (existing && typeof existing.destroy === "function") existing.destroy();
+
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return;
+
+            // 动态检测 Chart.js（通过 window.Chart 或 require）
+            const ChartLib = (window as any).Chart;
+            if (!ChartLib) {
+                console.warn("renderChart: Chart.js 未加载，降级为数据表格展示");
+                return;
+            }
+            const instance = new ChartLib(ctx, {
+                type: chartData.type,
+                data: chartData.data,
+                options: chartData.options || {}
+            });
+            this.charts.set(canvas.id, instance);
+        } catch (e) {
+            console.error("renderChart failed:", e);
+        }
+    }
+
+    // 剥离 ```html...``` 或 ```...``` Markdown 代码块包裹
+    private stripMarkdownWrapper(text: string): string {
+        let s = text;
+        s = s.replace(/^```html\s*/i, "").replace(/^```\s*/, "");
+        s = s.replace(/```\s*$/, "");
+        return s;
     }
 
     // ============================================================
