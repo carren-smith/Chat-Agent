@@ -173,7 +173,11 @@ export class Visual implements IVisual {
 
     // ============================================================
     // update() - Power BI 数据更新回调
-    // 切片器/筛选器每次变化 Power BI 都会重新调用此方法，传入最新 DataView
+    // 切片器/筛选器每次变化 Power BI 都会重新调用此方法，传入最新 DataView。
+    // 筛选器来源有两路：
+    //   1. options.jsonFilters  — 页面级/切片器筛选器（最常见的用户操作来源）
+    //   2. dataView.metadata.filters — 该视觉自身字段级筛选器
+    // 两路均需读取并合并，否则切片器选择不会出现在上下文中。
     // ============================================================
     public update(options: VisualUpdateOptions): void {
         const dataViews = options.dataViews;
@@ -188,11 +192,19 @@ export class Visual implements IVisual {
             dataSummary: "",
             dateRange: ""
         };
+
+        // ① 优先从 options.jsonFilters 提取页面级/切片器筛选器
+        const jsonFilters = (options as any).jsonFilters as any[];
+        if (Array.isArray(jsonFilters) && jsonFilters.length > 0) {
+            this.extractJsonFilters(jsonFilters);
+        }
+
         if (!dataViews || dataViews.length === 0 || !dataViews[0]) {
             this.updateContextBar();
             return;
         }
         const dataView: DataView = dataViews[0];
+        // ② 再从 dataView.metadata.filters 补充视觉自身的字段级筛选器（merge，不覆盖）
         this.extractFilters(dataView);
         this.extractTableData(dataView);
         this.extractMeasures(dataView);
@@ -201,10 +213,11 @@ export class Visual implements IVisual {
     }
 
     // ============================================================
-    // extractFilters：解析 dataView.metadata.filters
+    // extractFilters：解析 dataView.metadata.filters（视觉字段级筛选器）
     //
-    // Power BI 切片器每次变化都会触发 update() 并传入新 DataView，
-    // metadata.filters 中包含当前视觉上已应用的筛选器对象。
+    // 注意：此方法在 extractJsonFilters 之后调用，结果 merge 进
+    // this.reportContext.filters，不覆盖——避免清除已由 jsonFilters 捕获的
+    // 切片器/页面筛选器。
     // 支持 BasicFilter（values 数组）、AdvancedFilter（conditions）、
     // TopNFilter（topCount）三种格式。
     // ============================================================
@@ -212,56 +225,111 @@ export class Visual implements IVisual {
         try {
             const metadata = dataView.metadata as any;
             const rawFilters = metadata && metadata.filters;
-            const filterInfos: FilterInfo[] = [];
 
-            if (rawFilters && Array.isArray(rawFilters) && rawFilters.length > 0) {
-                rawFilters.forEach((filter: any) => {
-                    if (!filter || !filter.target) return;
+            if (!rawFilters || !Array.isArray(rawFilters) || rawFilters.length === 0) return;
 
-                    const target = filter.target;
-                    const table: string = target.table || "";
-                    const column: string = target.column || target.property || target.measure || "";
-                    if (!column) return;
+            rawFilters.forEach((filter: any) => {
+                if (!filter || !filter.target) return;
 
-                    let values: string[] = [];
-                    // BasicFilter
-                    if (Array.isArray(filter.values) && filter.values.length > 0) {
-                        values = filter.values.map((v: any) => (v === null ? "(空白)" : String(v)));
-                    }
-                    // AdvancedFilter
-                    else if (Array.isArray(filter.conditions) && filter.conditions.length > 0) {
-                        values = filter.conditions.map((c: any) => {
-                            const op = c.operator || "";
-                            const val = c.value !== undefined ? String(c.value) : "";
-                            return op ? op + " " + val : val;
-                        });
-                    }
-                    // TopNFilter
-                    else if (filter.topCount !== undefined) {
-                        values = ["Top " + filter.topCount];
-                    }
-                    else {
-                        values = ["(已筛选)"];
-                    }
+                const target = filter.target;
+                const table: string = target.table || "";
+                const column: string = target.column || target.property || target.measure || "";
+                if (!column) return;
 
-                    const existingIdx = filterInfos.findIndex(f => f.table === table && f.column === column);
-                    if (existingIdx >= 0) {
-                        const merged = Array.from(new Set([...filterInfos[existingIdx].values, ...values]));
-                        filterInfos[existingIdx].values = merged;
-                    } else {
-                        filterInfos.push({
-                            table: table,
-                            column: column,
-                            values: values,
-                            filterType: String(filter.filterType || "basic")
-                        });
-                    }
-                });
-            }
-            this.reportContext.filters = filterInfos;
+                let values: string[] = [];
+                // BasicFilter
+                if (Array.isArray(filter.values) && filter.values.length > 0) {
+                    values = filter.values.map((v: any) => (v === null ? "(空白)" : String(v)));
+                }
+                // AdvancedFilter
+                else if (Array.isArray(filter.conditions) && filter.conditions.length > 0) {
+                    values = filter.conditions.map((c: any) => {
+                        const op = c.operator || "";
+                        const val = c.value !== undefined ? String(c.value) : "";
+                        return op ? op + " " + val : val;
+                    });
+                }
+                // TopNFilter
+                else if (filter.topCount !== undefined) {
+                    values = ["Top " + filter.topCount];
+                }
+                else {
+                    values = ["(已筛选)"];
+                }
+
+                // Merge into this.reportContext.filters（不覆盖 extractJsonFilters 的结果）
+                const existingIdx = this.reportContext.filters.findIndex(
+                    f => f.table === table && f.column === column
+                );
+                if (existingIdx >= 0) {
+                    const merged = Array.from(new Set([
+                        ...this.reportContext.filters[existingIdx].values,
+                        ...values
+                    ]));
+                    this.reportContext.filters[existingIdx].values = merged;
+                } else {
+                    this.reportContext.filters.push({
+                        table,
+                        column,
+                        values,
+                        filterType: String(filter.filterType || "basic")
+                    });
+                }
+            });
         } catch (e) {
             console.warn("提取筛选器失败:", e);
-            this.reportContext.filters = [];
+        }
+    }
+
+    // ============================================================
+    // extractJsonFilters：解析 options.jsonFilters（页面级/切片器筛选器）
+    // 此数组由 Power BI 运行时注入，包含所有对本视觉生效的外部筛选器
+    // （切片器选择、页面筛选器、报表筛选器等），是捕获切片器状态的唯一可靠来源。
+    // 结果 merge 进 this.reportContext.filters，不覆盖。
+    // ============================================================
+    private extractJsonFilters(jsonFilters: any[]): void {
+        try {
+            jsonFilters.forEach((filter: any) => {
+                if (!filter || !filter.target) return;
+                const target = filter.target;
+                const table: string = target.table || "";
+                const column: string = target.column || target.measure || "";
+                if (!column) return;
+
+                let values: string[] = [];
+                if (Array.isArray(filter.values) && filter.values.length > 0) {
+                    values = filter.values.map((v: any) => (v === null ? "(空白)" : String(v)));
+                } else if (Array.isArray(filter.conditions) && filter.conditions.length > 0) {
+                    values = filter.conditions.map((c: any) => {
+                        const op = c.operator || "";
+                        const val = c.value !== undefined ? String(c.value) : "";
+                        return op ? `${op} ${val}` : val;
+                    });
+                } else if (filter.topCount !== undefined) {
+                    values = ["Top " + filter.topCount];
+                } else {
+                    values = ["(已筛选)"];
+                }
+
+                const existingIdx = this.reportContext.filters.findIndex(
+                    f => f.table === table && f.column === column
+                );
+                if (existingIdx >= 0) {
+                    const merged = Array.from(new Set([
+                        ...this.reportContext.filters[existingIdx].values,
+                        ...values
+                    ]));
+                    this.reportContext.filters[existingIdx].values = merged;
+                } else {
+                    const schema: string = (filter.$schema || "").toLowerCase();
+                    const filterType = schema.includes("basic") ? "basic"
+                        : schema.includes("advanced") ? "advanced"
+                        : String(filter.filterType || "json");
+                    this.reportContext.filters.push({ table, column, values, filterType });
+                }
+            });
+        } catch (e) {
+            console.warn("提取 JSON 筛选器失败:", e);
         }
     }
 
@@ -629,14 +697,22 @@ PowerBI专家：
         if (!this.contextBar) return;
         const ctx = this.reportContext;
         const hasData = ctx.columnNames.length > 0 || ctx.measures.length > 0;
+        const hasFilters = ctx.filters.length > 0;
         const statusIcon = hasData ? " " : " ";
         let html = "<span class=\"ctx-icon\">" + statusIcon + "</span>";
         html += "<span class=\"ctx-text\">";
         html += ctx.columnNames.length + " 列 · ";
         html += ctx.dataRowCount + " 行 · ";
         html += ctx.measures.length + " 个度量值";
+        if (hasFilters) {
+            html += " · <span style=\"color:#b45309;font-weight:600;\">筛选器: " + ctx.filters.length + " 个</span>";
+        }
         html += "</span>";
-        html += "<span class=\"ctx-badge\">" + (hasData ? "数据已就绪" : "未绑定数据") + "</span>";
+        if (hasFilters) {
+            html += "<span class=\"ctx-badge\" style=\"background:#fde68a;color:#92400e;\">已筛选</span>";
+        } else {
+            html += "<span class=\"ctx-badge\">" + (hasData ? "数据已就绪" : "未绑定数据") + "</span>";
+        }
         this.contextBar.innerHTML = html;
     }
 
@@ -1737,20 +1813,28 @@ PowerBI专家：
 
     // ============================================================
     // streamOpenAI / DeepSeek
-    // 【修复历史消息策略】只传用户侧历史问题，不传 assistant 旧回复
-    // 防止 LLM 从历史 assistant 消息中读取旧的数据快照
+    // 【历史消息策略】同时传 user 和 assistant 历史，保持对话连贯性。
+    // assistant 历史消息剥除 HTML 标签后传入，避免旧数据快照污染当前上下文
+    // （当前轮次的最新数据已由 buildFinalUserPrompt() 静默注入 finalPrompt）。
     // ============================================================
-    // finalPrompt 已由 buildFinalUserPrompt() 静默封装数据上下文，
-    // history 只传原始用户文字（不含数据上下文，防止上下文污染）
     private async streamOpenAI(finalPrompt: string, systemPrompt: string, onChunk: (chunk: string) => void): Promise<string> {
         const apiUrl = this.settings.apiEndpoint || "https://api.openai.com/v1/chat/completions";
 
-        // 历史消息：排除当前 userMsg（倒数第2）和空 botMsg（倒数第1），只取用户侧原始文字
+        // 历史消息：排除当前 userMsg（倒数第2）和空 botMsg（倒数第1）
         const historyMessages: Array<{ role: string; content: string }> = [];
-        const recentMsgs = this.messages.slice(-12, -2);  // 不含当前轮次
+        const recentMsgs = this.messages.slice(-12, -2);
         recentMsgs.forEach(m => {
-            if (!m.isUser) return;  // 只传用户历史，不传 assistant 回复（防旧数据污染）
-            historyMessages.push({ role: "user", content: m.text });
+            const role = m.isUser ? "user" : "assistant";
+            let content: string;
+            if (m.isUser) {
+                content = m.text;
+            } else {
+                // 剥除 HTML 标签，只保留文字内容，防止 token 膨胀和旧数据快照污染
+                const tmp = document.createElement("div");
+                tmp.innerHTML = m.text;
+                content = (tmp.textContent || tmp.innerText || "").trim();
+            }
+            if (content) historyMessages.push({ role, content });
         });
 
         const requestMessages = [
@@ -1883,10 +1967,18 @@ PowerBI专家：
         }
 
         const historyMessages: Array<{ role: string; content: string }> = [];
-        const recentMsgs = this.messages.slice(-12, -2);  // 排除当前轮次
+        const recentMsgs = this.messages.slice(-12, -2);
         recentMsgs.forEach(m => {
-            if (!m.isUser) return;
-            historyMessages.push({ role: "user", content: m.text });
+            const role = m.isUser ? "user" : "assistant";
+            let content: string;
+            if (m.isUser) {
+                content = m.text;
+            } else {
+                const tmp = document.createElement("div");
+                tmp.innerHTML = m.text;
+                content = (tmp.textContent || tmp.innerText || "").trim();
+            }
+            if (content) historyMessages.push({ role, content });
         });
 
         const requestMessages = [
@@ -2201,9 +2293,12 @@ PowerBI专家：
 
     // ============================================================
     // sanitizeHTML：基于白名单的 HTML 清洗
-    // 参考模板 sanitizeHTML(t)：
     //   使用 DOMParser 解析，只保留安全标签和属性，
     //   防止 AI 返回含脚本或危险属性的内容被直接渲染。
+    //
+    // 【修复】不在白名单内的标签执行"解包"（unwrap）而非直接删除：
+    //   将其子节点提升到父节点，保留文字内容。
+    //   例如 <code>some text</code> → "some text"，而不是丢失文字。
     // ============================================================
     private sanitizeHTML(html: string): string {
         try {
@@ -2221,7 +2316,16 @@ PowerBI专家：
                     const el = node as Element;
                     const tag = el.tagName.toLowerCase();
                     if (!allowedTags.has(tag)) {
-                        el.remove();
+                        // 解包：把子节点提升到父节点，保留文字内容，再删除空壳元素
+                        const parent = el.parentNode;
+                        if (parent) {
+                            const children = Array.from(el.childNodes);
+                            children.forEach(child => {
+                                parent.insertBefore(child, el);
+                                clean(child);
+                            });
+                            parent.removeChild(el);
+                        }
                         return;
                     }
                     // 移除非白名单属性
@@ -2231,7 +2335,8 @@ PowerBI专家：
                         }
                     });
                     Array.from(el.childNodes).forEach(child => clean(child));
-                } else {
+                } else if (node.nodeType !== Node.TEXT_NODE) {
+                    // 删除注释节点等非文本非元素节点
                     node.parentNode?.removeChild(node);
                 }
             };
