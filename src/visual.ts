@@ -554,7 +554,15 @@ PowerBI专家：
             contextData += "当前页面未绑定数据字段。\n";
         }
 
-        return `${contextData}\n用户问题：${userMessage}`;
+        const outputFormatPrompt = "请基于提供的数据回答用户问题。如果是要求写报告、方案，请使用正规商业咨询报告格式（包含 <h3> 标题、详细章节等），确保美观精致；如果是正常交流，则保持简洁。请务必使用HTML格式返回结果：\n"
+            + "1. 使用<h3>、<h4>作为标题\n"
+            + "2. 使用<table class=\"report-table\">显示表格\n"
+            + "3. 使用<ul>、<ol>显示列表\n"
+            + "4. 换行请使用 <br> 或 <p>\n"
+            + "5. 重点内容使用<span class=\"report-emphasis\">加粗</span>\n"
+            + "6. 不要使用Markdown格式，直接返回HTML代码。";
+
+        return `${contextData}\n用户问题：${userMessage}\n\n${outputFormatPrompt}`;
     }
 
     // ============================================================
