@@ -7,64 +7,34 @@
             "description": "将报表字段或度量值拖⼊此处，AI 可读取并分析"
         }
     ],
-   "dataViewMappings": [
-    {
-        "table": {
-            "rows": {
-                "select": [
-                    {
-                        "for": {
-                            "in": "dataFields"
+    "dataViewMappings": [
+        {
+            "table": {
+                "rows": {
+                    "select": [
+                        {
+                            "for": {
+                                "in": "dataFields"
+                            }
                         }
-                    }
-                ],
-                "dataReductionAlgorithm": {
-                    "top": {
-                        "count": 1000
+                    ],
+                    "dataReductionAlgorithm": {
+                        "top": {
+                            "count": 1000
+                        }
                     }
                 }
             }
         }
-    }
-],
+    ],
     "objects": {
-        "chatSettings": {
-            "displayName": "Chat Settings",
+        "aiSettings": {
+            "displayName": "AI Settings",
             "properties": {
-                "headerColor": {
-                    "displayName": "Header Color",
+                "apiUrl": {
+                    "displayName": "API URL",
                     "type": {
-                        "fill": {
-                            "solid": {
-                                "color": true
-                            }
-                        }
-                    }
-                },
-                "userMessageColor": {
-                    "displayName": "User Message Color",
-                    "type": {
-                        "fill": {
-                            "solid": {
-                                "color": true
-                            }
-                        }
-                    }
-                },
-                "botMessageColor": {
-                    "displayName": "Bot Message Color",
-                    "type": {
-                        "fill": {
-                            "solid": {
-                                "color": true
-                            }
-                        }
-                    }
-                },
-                "fontSize": {
-                    "displayName": "Font Size",
-                    "type": {
-                        "numeric": true
+                        "text": true
                     }
                 },
                 "apiKey": {
@@ -73,8 +43,716 @@
                         "text": true
                     }
                 },
-                "modelName": {
-                    "displayName": "Model Name",
+                "model": {
+                    "displayName": "Model",
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "licenseSettings": {
+            "displayName": "License Settings",
+            "properties": {
+                "licenseKey": {
+                    "displayName": "License Key",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "boundFingerprint": {
+                    "displayName": "Bound Fingerprint",
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "historySettings": {
+            "displayName": "History Settings",
+            "properties": {
+                "chunkCount": {
+                    "displayName": "Chunk Count",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "lastActiveSessionId": {
+                    "displayName": "Last Active Session",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk0": {
+                    "displayName": "Chunk 0",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk1": {
+                    "displayName": "Chunk 1",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk2": {
+                    "displayName": "Chunk 2",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk3": {
+                    "displayName": "Chunk 3",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk4": {
+                    "displayName": "Chunk 4",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk5": {
+                    "displayName": "Chunk 5",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk6": {
+                    "displayName": "Chunk 6",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk7": {
+                    "displayName": "Chunk 7",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk8": {
+                    "displayName": "Chunk 8",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk9": {
+                    "displayName": "Chunk 9",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk10": {
+                    "displayName": "Chunk 10",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk11": {
+                    "displayName": "Chunk 11",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk12": {
+                    "displayName": "Chunk 12",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk13": {
+                    "displayName": "Chunk 13",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk14": {
+                    "displayName": "Chunk 14",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk15": {
+                    "displayName": "Chunk 15",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk16": {
+                    "displayName": "Chunk 16",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk17": {
+                    "displayName": "Chunk 17",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk18": {
+                    "displayName": "Chunk 18",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk19": {
+                    "displayName": "Chunk 19",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk20": {
+                    "displayName": "Chunk 20",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk21": {
+                    "displayName": "Chunk 21",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk22": {
+                    "displayName": "Chunk 22",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk23": {
+                    "displayName": "Chunk 23",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk24": {
+                    "displayName": "Chunk 24",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk25": {
+                    "displayName": "Chunk 25",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk26": {
+                    "displayName": "Chunk 26",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk27": {
+                    "displayName": "Chunk 27",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk28": {
+                    "displayName": "Chunk 28",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk29": {
+                    "displayName": "Chunk 29",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk30": {
+                    "displayName": "Chunk 30",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk31": {
+                    "displayName": "Chunk 31",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk32": {
+                    "displayName": "Chunk 32",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk33": {
+                    "displayName": "Chunk 33",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk34": {
+                    "displayName": "Chunk 34",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk35": {
+                    "displayName": "Chunk 35",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk36": {
+                    "displayName": "Chunk 36",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk37": {
+                    "displayName": "Chunk 37",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk38": {
+                    "displayName": "Chunk 38",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk39": {
+                    "displayName": "Chunk 39",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk40": {
+                    "displayName": "Chunk 40",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk41": {
+                    "displayName": "Chunk 41",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk42": {
+                    "displayName": "Chunk 42",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk43": {
+                    "displayName": "Chunk 43",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk44": {
+                    "displayName": "Chunk 44",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk45": {
+                    "displayName": "Chunk 45",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk46": {
+                    "displayName": "Chunk 46",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk47": {
+                    "displayName": "Chunk 47",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk48": {
+                    "displayName": "Chunk 48",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk49": {
+                    "displayName": "Chunk 49",
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "tmdlSettings": {
+            "displayName": "TMDL Settings",
+            "properties": {
+                "chunkCount": {
+                    "displayName": "Chunk Count",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "tmdlCode": {
+                    "displayName": "TMDL Code",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk0": {
+                    "displayName": "Chunk 0",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk1": {
+                    "displayName": "Chunk 1",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk2": {
+                    "displayName": "Chunk 2",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk3": {
+                    "displayName": "Chunk 3",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk4": {
+                    "displayName": "Chunk 4",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk5": {
+                    "displayName": "Chunk 5",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk6": {
+                    "displayName": "Chunk 6",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk7": {
+                    "displayName": "Chunk 7",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk8": {
+                    "displayName": "Chunk 8",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk9": {
+                    "displayName": "Chunk 9",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk10": {
+                    "displayName": "Chunk 10",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk11": {
+                    "displayName": "Chunk 11",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk12": {
+                    "displayName": "Chunk 12",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk13": {
+                    "displayName": "Chunk 13",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk14": {
+                    "displayName": "Chunk 14",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk15": {
+                    "displayName": "Chunk 15",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk16": {
+                    "displayName": "Chunk 16",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk17": {
+                    "displayName": "Chunk 17",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk18": {
+                    "displayName": "Chunk 18",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk19": {
+                    "displayName": "Chunk 19",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk20": {
+                    "displayName": "Chunk 20",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk21": {
+                    "displayName": "Chunk 21",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk22": {
+                    "displayName": "Chunk 22",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk23": {
+                    "displayName": "Chunk 23",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk24": {
+                    "displayName": "Chunk 24",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk25": {
+                    "displayName": "Chunk 25",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk26": {
+                    "displayName": "Chunk 26",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk27": {
+                    "displayName": "Chunk 27",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk28": {
+                    "displayName": "Chunk 28",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk29": {
+                    "displayName": "Chunk 29",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk30": {
+                    "displayName": "Chunk 30",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk31": {
+                    "displayName": "Chunk 31",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk32": {
+                    "displayName": "Chunk 32",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk33": {
+                    "displayName": "Chunk 33",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk34": {
+                    "displayName": "Chunk 34",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk35": {
+                    "displayName": "Chunk 35",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk36": {
+                    "displayName": "Chunk 36",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk37": {
+                    "displayName": "Chunk 37",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk38": {
+                    "displayName": "Chunk 38",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk39": {
+                    "displayName": "Chunk 39",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk40": {
+                    "displayName": "Chunk 40",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk41": {
+                    "displayName": "Chunk 41",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk42": {
+                    "displayName": "Chunk 42",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk43": {
+                    "displayName": "Chunk 43",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk44": {
+                    "displayName": "Chunk 44",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk45": {
+                    "displayName": "Chunk 45",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk46": {
+                    "displayName": "Chunk 46",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk47": {
+                    "displayName": "Chunk 47",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk48": {
+                    "displayName": "Chunk 48",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "chunk49": {
+                    "displayName": "Chunk 49",
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "welcomeSettings": {
+            "displayName": "Welcome Settings",
+            "properties": {
+                "welcomeMessage": {
+                    "displayName": "Welcome Message",
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "suggestionSettings": {
+            "displayName": "Suggestion Settings",
+            "properties": {
+                "question1": {
+                    "displayName": "Question 1",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "question2": {
+                    "displayName": "Question 2",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "question3": {
+                    "displayName": "Question 3",
+                    "type": {
+                        "text": true
+                    }
+                }
+            }
+        },
+        "aboutSettings": {
+            "displayName": "About Settings",
+            "properties": {
+                "author": {
+                    "displayName": "Author",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "version": {
+                    "displayName": "Version",
+                    "type": {
+                        "text": true
+                    }
+                },
+                "declaration": {
+                    "displayName": "Declaration",
                     "type": {
                         "text": true
                     }
@@ -94,7 +772,8 @@
                 "https://api.openai.com",
                 "https://api.deepseek.com",
                 "https://api.anthropic.com",
-                "https://generativelanguage.googleapis.com"
+                "https://generativelanguage.googleapis.com",
+                "https://abi-chat-verify-yxoranbhea.cn-hangzhou.fcapp.run"
             ]
         }
     ],
