@@ -409,12 +409,9 @@ export class Visual implements IVisual {
     }
 
     // ============================================================
-    // buildSystemPrompt：每次发送消息时实时构建
-    // 每次调用都会读取 this.reportContext 的最新状态，保证筛选器实时性
+    // buildSystemPrompt：系统角色说明（不再注入数据上下文）
     // ============================================================
     private buildSystemPrompt(): string {
-        const ctx = this.reportContext;
-
         const systemInstructions = `你是"powerbi pro打造的Chat Agent"，是一位由powerbi pro打造的AI，在数据领域拥有三位一体的专家身份：PowerBI专家、数据分析专家、数据可视化专家。你的使命是成为每一位用户身边触手可及的资深数据顾问，帮助用户从数据中挖掘价值，提升决策能力。
 
 【核心要求】
@@ -501,61 +498,63 @@ PowerBI专家：
 
 请用中文回答问题，并提供有用的数据洞察。`;
 
-        // ============================================================
-        // 动态注入 Power BI 实时数据上下文
-        // 每次 sendMessage() 调用时实时读取 this.reportContext，保证最新
-        // ============================================================
-        let contextData = "\n\n=== Power BI 实时数据上下文（本次提问时实时生成，请以此为准，忽略历史对话中的旧数据快照）===\n";
+        return systemInstructions;
+    }
 
-        contextData += "报表页面：" + (ctx.pageName || "未知页面") + "\n";
-        contextData += "数据更新时间：" + (ctx.lastUpdated || "未知，请勿假设数据为实时数据") + "\n";
-        contextData += "数据总行数：" + ctx.dataRowCount + " 行\n";
-
-        if (ctx.dateRange) {
-            contextData += "数据日期范围：" + ctx.dateRange + "\n";
+    // ============================================================
+    // 构建历史消息（最多10条，过滤空内容；若最后一条为空则视为loading/error并去掉）
+    // ============================================================
+    private getConversationHistoryMessages(): Array<{ role: string; content: string }> {
+        const chatMessages = [...this.messages];
+        const last = chatMessages[chatMessages.length - 1];
+        if (last && (!last.text || !last.text.trim())) {
+            chatMessages.pop();
         }
 
-        if (ctx.filters && ctx.filters.length > 0) {
-            contextData += "\n【当前筛选器状态（实时）】（分析结论必须限定在此范围内，不得泛化到全局）\n";
-            ctx.filters.forEach(f => {
-                contextData += "- " + f.table + "." + f.column + " = " + f.values.join("、") + "\n";
-            });
-        } else {
-            contextData += "\n【当前筛选器状态（实时）】无筛选条件，分析全量数据\n";
-        }
+        return chatMessages
+            .filter(m => m.text && m.text.trim())
+            .slice(-10)
+            .map(m => ({
+                role: m.isUser ? "user" : "assistant",
+                content: m.text
+            }));
+    }
 
-        if (ctx.columnNames && ctx.columnNames.length > 0) {
-            contextData += "\n【数据字段列表】\n";
-            ctx.columnNames.forEach(col => {
-                contextData += "- " + col + "\n";
-            });
-        }
+    // ============================================================
+    // 构建当前轮增强用户输入（l）
+    // ============================================================
+    private buildEnhancedUserMessage(userMessage: string): string {
+        const ctx = this.reportContext;
 
+        let contextData = "数据上下文：\n";
+        contextData += "数据概览：\n";
+        contextData += "- 列数：" + (ctx.columnNames?.length || 0) + "\n";
+        contextData += "- 行数：" + (ctx.dataRowCount || 0) + "\n";
+        contextData += "- 列名：" + ((ctx.columnNames && ctx.columnNames.length > 0) ? ctx.columnNames.join(", ") : "无") + "\n\n";
+
+        contextData += "【关键统计指标（已复核，请直接引用）】：\n";
         if (ctx.measures && ctx.measures.length > 0) {
-            contextData += "\n【关键统计指标】（参考库，按需引用，严禁全部列出，严禁对比率类字段求和）\n";
             ctx.measures.forEach(m => {
-                contextData += "- " + m.name + "：" + m.formattedValue + "\n";
-            });
-        }
-
-        if (ctx.tableData && ctx.tableData.length > 0) {
-            contextData += "\n【完整数据（共 " + ctx.dataRowCount + " 行）】\n";
-            const cols = ctx.columnNames;
-            contextData += cols.join("\t") + "\n";
-            ctx.tableData.forEach(row => {
-                const vals = cols.map(c => {
-                    const v = row[c];
-                    return (v === null || v === undefined) ? "" : String(v);
-                });
-                contextData += vals.join("\t") + "\n";
+                contextData += "- " + m.name + "：" + (m.formattedValue || "") + "\n";
             });
         } else {
-            contextData += "\n【数据】当前页面未绑定数据字段，请提示用户在右侧字段面板拖入数据列或度量值后再进行分析。\n";
+            contextData += "- 暂无度量值\n";
         }
 
-        contextData += "\n=== 上下文结束 ===\n";
+        contextData += "\n完整数据内容：\n";
+        if (ctx.tableData && ctx.tableData.length > 0 && ctx.columnNames && ctx.columnNames.length > 0) {
+            ctx.tableData.forEach((row, idx) => {
+                const rowText = ctx.columnNames.map(col => {
+                    const value = row[col];
+                    return col + ": " + (value === null || value === undefined ? "" : String(value));
+                }).join(", ");
+                contextData += (idx + 1) + ". " + rowText + "\n";
+            });
+        } else {
+            contextData += "当前页面未绑定数据字段。\n";
+        }
 
-        return systemInstructions + contextData;
+        return `${contextData}\n用户问题：${userMessage}`;
     }
 
     // ============================================================
@@ -1571,18 +1570,13 @@ PowerBI专家：
     private async streamOpenAI(userMessage: string, systemPrompt: string, onChunk: (chunk: string) => void): Promise<string> {
         const apiUrl = this.settings.apiEndpoint || "https://api.openai.com/v1/chat/completions";
 
-        const historyMessages: Array<{ role: string; content: string }> = [];
-        const recentMsgs = this.messages.slice(-10);
-        recentMsgs.forEach(m => {
-            if (!m.isUser) return;          // 不传 assistant 历史回复
-            if (m.text === userMessage) return; // 不传当前发送的消息（末尾单独附加）
-            historyMessages.push({ role: "user", content: m.text });
-        });
+        const historyMessages = this.getConversationHistoryMessages();
+        const enhancedUserMessage = this.buildEnhancedUserMessage(userMessage);
 
         const requestMessages = [
             { role: "system", content: systemPrompt },
             ...historyMessages,
-            { role: "user", content: userMessage }
+            { role: "user", content: enhancedUserMessage }
         ];
 
         const requestBody = {
@@ -1648,9 +1642,17 @@ PowerBI专家：
         const modelPath = this.settings.modelName.startsWith("models/") ? this.settings.modelName : ("models/" + this.settings.modelName);
         const apiUrl = baseUrl + "/" + modelPath + ":streamGenerateContent?key=" + this.settings.apiKey + "&alt=sse";
 
+        const historyMessages = this.getConversationHistoryMessages();
+        const enhancedUserMessage = this.buildEnhancedUserMessage(userMessage);
+        let mergedUserText = "";
+        if (historyMessages.length > 0) {
+            mergedUserText += historyMessages.map(m => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join("\n\n") + "\n\n";
+        }
+        mergedUserText += `User: ${enhancedUserMessage}`;
+
         const requestBody = {
             systemInstruction: { parts: [{ text: systemPrompt }] },
-            contents: [{ parts: [{ text: userMessage }] }]
+            contents: [{ parts: [{ text: mergedUserText }] }]
         };
 
         const response = await fetch(apiUrl, {
@@ -1706,18 +1708,13 @@ PowerBI专家：
             apiUrl = apiUrl + "/chat/completions";
         }
 
-        const historyMessages: Array<{ role: string; content: string }> = [];
-        const recentMsgs = this.messages.slice(-10);
-        recentMsgs.forEach(m => {
-            if (!m.isUser) return;
-            if (m.text === userMessage) return;
-            historyMessages.push({ role: "user", content: m.text });
-        });
+        const historyMessages = this.getConversationHistoryMessages();
+        const enhancedUserMessage = this.buildEnhancedUserMessage(userMessage);
 
         const requestMessages = [
             { role: "system", content: systemPrompt },
             ...historyMessages,
-            { role: "user", content: userMessage }
+            { role: "user", content: enhancedUserMessage }
         ];
 
         const requestBody = {
