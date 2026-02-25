@@ -4,81 +4,191 @@
             "displayName": "数据字段",
             "name": "dataFields",
             "kind": "GroupingOrMeasure",
-            "description": "将报表字段或度量值拖⼊此处，AI 可读取并分析"
+            "description": "将报表字段或度量值拖入此处，AI 可读取并分析"
         }
     ],
-   "dataViewMappings": [
-    {
-        "table": {
-            "rows": {
-                "select": [
-                    {
-                        "for": {
-                            "in": "dataFields"
+    "dataViewMappings": [
+        {
+            "table": {
+                "rows": {
+                    "select": [
+                        {
+                            "for": {
+                                "in": "dataFields"
+                            }
                         }
-                    }
-                ],
-                "dataReductionAlgorithm": {
-                    "top": {
-                        "count": 1000
+                    ],
+                    "dataReductionAlgorithm": {
+                        "top": {
+                            "count": 1000
+                        }
                     }
                 }
             }
         }
-    }
-],
+    ],
     "objects": {
-        "chatSettings": {
-            "displayName": "Chat Settings",
+        "aiSettings": {
+            "displayName": "AI 连接配置",
             "properties": {
-                "headerColor": {
-                    "displayName": "Header Color",
-                    "type": {
-                        "fill": {
-                            "solid": {
-                                "color": true
-                            }
-                        }
-                    }
-                },
-                "userMessageColor": {
-                    "displayName": "User Message Color",
-                    "type": {
-                        "fill": {
-                            "solid": {
-                                "color": true
-                            }
-                        }
-                    }
-                },
-                "botMessageColor": {
-                    "displayName": "Bot Message Color",
-                    "type": {
-                        "fill": {
-                            "solid": {
-                                "color": true
-                            }
-                        }
-                    }
-                },
-                "fontSize": {
-                    "displayName": "Font Size",
-                    "type": {
-                        "numeric": true
-                    }
-                },
                 "apiKey": {
                     "displayName": "API Key",
-                    "type": {
-                        "text": true
-                    }
+                    "type": { "text": true }
                 },
-                "modelName": {
-                    "displayName": "Model Name",
-                    "type": {
-                        "text": true
-                    }
+                "apiUrl": {
+                    "displayName": "API URL",
+                    "type": { "text": true }
+                },
+                "model": {
+                    "displayName": "模型名称",
+                    "type": { "text": true }
                 }
+            }
+        },
+        "welcomeSettings": {
+            "displayName": "欢迎语设置",
+            "properties": {
+                "welcomeMessage": {
+                    "displayName": "欢迎语",
+                    "type": { "text": true }
+                }
+            }
+        },
+        "suggestionSettings": {
+            "displayName": "建议问题",
+            "properties": {
+                "question1": {
+                    "displayName": "建议问题 1",
+                    "type": { "text": true }
+                },
+                "question2": {
+                    "displayName": "建议问题 2",
+                    "type": { "text": true }
+                },
+                "question3": {
+                    "displayName": "建议问题 3",
+                    "type": { "text": true }
+                }
+            }
+        },
+        "aboutSettings": {
+            "displayName": "关于",
+            "properties": {
+                "author": {
+                    "displayName": "作者",
+                    "type": { "text": true }
+                },
+                "version": {
+                    "displayName": "版本",
+                    "type": { "text": true }
+                },
+                "declaration": {
+                    "displayName": "声明",
+                    "type": { "text": true }
+                }
+            }
+        },
+        "tmdlSettings": {
+            "displayName": "TMDL 管理",
+            "properties": {
+                "tmdlCode": {
+                    "displayName": "TMDL Code",
+                    "type": { "text": true }
+                },
+                "lastActiveSessionId": {
+                    "displayName": "Last Active Session ID",
+                    "type": { "text": true }
+                },
+                "chunkCount": {
+                    "displayName": "Chunk Count",
+                    "type": { "numeric": true }
+                },
+                "chunk0": { "displayName": "chunk0", "type": { "text": true } },
+                "chunk1": { "displayName": "chunk1", "type": { "text": true } },
+                "chunk2": { "displayName": "chunk2", "type": { "text": true } },
+                "chunk3": { "displayName": "chunk3", "type": { "text": true } },
+                "chunk4": { "displayName": "chunk4", "type": { "text": true } },
+                "chunk5": { "displayName": "chunk5", "type": { "text": true } },
+                "chunk6": { "displayName": "chunk6", "type": { "text": true } },
+                "chunk7": { "displayName": "chunk7", "type": { "text": true } },
+                "chunk8": { "displayName": "chunk8", "type": { "text": true } },
+                "chunk9": { "displayName": "chunk9", "type": { "text": true } }
+            }
+        },
+        "licenseSettings": {
+            "displayName": "License",
+            "properties": {
+                "licenseKey": {
+                    "displayName": "License Key",
+                    "type": { "text": true }
+                },
+                "boundFingerprint": {
+                    "displayName": "Bound Fingerprint",
+                    "type": { "text": true }
+                }
+            }
+        },
+        "historySettings": {
+            "displayName": "历史记录",
+            "properties": {
+                "lastActiveSessionId": {
+                    "displayName": "Last Active Session ID",
+                    "type": { "text": true }
+                },
+                "chunkCount": {
+                    "displayName": "Chunk Count",
+                    "type": { "numeric": true }
+                },
+                "chunk0": { "displayName": "chunk0", "type": { "text": true } },
+                "chunk1": { "displayName": "chunk1", "type": { "text": true } },
+                "chunk2": { "displayName": "chunk2", "type": { "text": true } },
+                "chunk3": { "displayName": "chunk3", "type": { "text": true } },
+                "chunk4": { "displayName": "chunk4", "type": { "text": true } },
+                "chunk5": { "displayName": "chunk5", "type": { "text": true } },
+                "chunk6": { "displayName": "chunk6", "type": { "text": true } },
+                "chunk7": { "displayName": "chunk7", "type": { "text": true } },
+                "chunk8": { "displayName": "chunk8", "type": { "text": true } },
+                "chunk9": { "displayName": "chunk9", "type": { "text": true } },
+                "chunk10": { "displayName": "chunk10", "type": { "text": true } },
+                "chunk11": { "displayName": "chunk11", "type": { "text": true } },
+                "chunk12": { "displayName": "chunk12", "type": { "text": true } },
+                "chunk13": { "displayName": "chunk13", "type": { "text": true } },
+                "chunk14": { "displayName": "chunk14", "type": { "text": true } },
+                "chunk15": { "displayName": "chunk15", "type": { "text": true } },
+                "chunk16": { "displayName": "chunk16", "type": { "text": true } },
+                "chunk17": { "displayName": "chunk17", "type": { "text": true } },
+                "chunk18": { "displayName": "chunk18", "type": { "text": true } },
+                "chunk19": { "displayName": "chunk19", "type": { "text": true } },
+                "chunk20": { "displayName": "chunk20", "type": { "text": true } },
+                "chunk21": { "displayName": "chunk21", "type": { "text": true } },
+                "chunk22": { "displayName": "chunk22", "type": { "text": true } },
+                "chunk23": { "displayName": "chunk23", "type": { "text": true } },
+                "chunk24": { "displayName": "chunk24", "type": { "text": true } },
+                "chunk25": { "displayName": "chunk25", "type": { "text": true } },
+                "chunk26": { "displayName": "chunk26", "type": { "text": true } },
+                "chunk27": { "displayName": "chunk27", "type": { "text": true } },
+                "chunk28": { "displayName": "chunk28", "type": { "text": true } },
+                "chunk29": { "displayName": "chunk29", "type": { "text": true } },
+                "chunk30": { "displayName": "chunk30", "type": { "text": true } },
+                "chunk31": { "displayName": "chunk31", "type": { "text": true } },
+                "chunk32": { "displayName": "chunk32", "type": { "text": true } },
+                "chunk33": { "displayName": "chunk33", "type": { "text": true } },
+                "chunk34": { "displayName": "chunk34", "type": { "text": true } },
+                "chunk35": { "displayName": "chunk35", "type": { "text": true } },
+                "chunk36": { "displayName": "chunk36", "type": { "text": true } },
+                "chunk37": { "displayName": "chunk37", "type": { "text": true } },
+                "chunk38": { "displayName": "chunk38", "type": { "text": true } },
+                "chunk39": { "displayName": "chunk39", "type": { "text": true } },
+                "chunk40": { "displayName": "chunk40", "type": { "text": true } },
+                "chunk41": { "displayName": "chunk41", "type": { "text": true } },
+                "chunk42": { "displayName": "chunk42", "type": { "text": true } },
+                "chunk43": { "displayName": "chunk43", "type": { "text": true } },
+                "chunk44": { "displayName": "chunk44", "type": { "text": true } },
+                "chunk45": { "displayName": "chunk45", "type": { "text": true } },
+                "chunk46": { "displayName": "chunk46", "type": { "text": true } },
+                "chunk47": { "displayName": "chunk47", "type": { "text": true } },
+                "chunk48": { "displayName": "chunk48", "type": { "text": true } },
+                "chunk49": { "displayName": "chunk49", "type": { "text": true } }
             }
         }
     },
@@ -94,7 +204,9 @@
                 "https://api.openai.com",
                 "https://api.deepseek.com",
                 "https://api.anthropic.com",
-                "https://generativelanguage.googleapis.com"
+                "https://generativelanguage.googleapis.com",
+                "https://*.openai.com",
+                "https://*.googleapis.com"
             ]
         }
     ],
