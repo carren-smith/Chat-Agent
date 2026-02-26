@@ -150,6 +150,13 @@ export class Visual implements IVisual {
     private isGenerating = false;
     private isComposing = false;
 
+    // In-memory cache for AI settings.
+    // persistProperties() triggers an async update() call; caching ensures the
+    // values are available immediately after save without waiting for that round-trip.
+    private cachedApiUrl: string = "";
+    private cachedApiKeyRaw: string = "";   // stored unmasked
+    private cachedModel: string = "";
+
     // ── Constructor ───────────────────────────────────────────────────────────
 
     constructor(options: VisualConstructorOptions) {
@@ -604,11 +611,26 @@ export class Visual implements IVisual {
         document.body.appendChild(modal);
     }
 
+    /** Single source of truth for current AI settings (dataView → cache → formattingSettings). */
+    private getAISettings(): { apiUrl: string; apiKeyRaw: string; model: string } {
+        const obj = this.dataView?.metadata?.objects as any;
+        const apiUrl =
+            String(obj?.aiSettings?.apiUrl || "").trim() ||
+            this.cachedApiUrl ||
+            this.formattingSettings.aiSettingsCard.apiUrl.value || "";
+        const apiKeyRaw =
+            this.unmaskString(String(obj?.aiSettings?.apiKey || "").trim()) ||
+            this.cachedApiKeyRaw ||
+            this.unmaskString(this.formattingSettings.aiSettingsCard.apiKey.value || "") || "";
+        const model =
+            String(obj?.aiSettings?.model || "").trim() ||
+            this.cachedModel ||
+            this.formattingSettings.aiSettingsCard.model.value || "";
+        return { apiUrl, apiKeyRaw, model };
+    }
+
     private showSettingsModal(): void {
-        const objects = this.dataView?.metadata?.objects as any;
-        const apiUrl = String(objects?.aiSettings?.apiUrl || this.formattingSettings.aiSettingsCard.apiUrl.value || "");
-        const apiKey = this.unmaskString(String(objects?.aiSettings?.apiKey || this.formattingSettings.aiSettingsCard.apiKey.value || ""));
-        const model  = String(objects?.aiSettings?.model  || this.formattingSettings.aiSettingsCard.model.value  || "");
+        const { apiUrl, apiKeyRaw, model } = this.getAISettings();
         const tmdl   = TmdlManager.loadTmdl(this.dataView?.metadata?.objects);
 
         const modal = document.createElement("div");
@@ -626,7 +648,7 @@ export class Visual implements IVisual {
                     </div>
                     <div class="modal-field">
                         <label>API Key</label>
-                        <input id="s-key" type="password" value="${this.sanitizeHTML(apiKey)}" placeholder="sk-..."/>
+                        <input id="s-key" type="password" value="${this.sanitizeHTML(apiKeyRaw)}" placeholder="sk-..."/>
                     </div>
                     <div class="modal-field">
                         <label>模型名称</label>
@@ -654,6 +676,11 @@ export class Visual implements IVisual {
             const key   = (modal.querySelector("#s-key") as HTMLInputElement).value.trim();
             const mdl   = (modal.querySelector("#s-model") as HTMLInputElement).value.trim();
             const tmdlv = (modal.querySelector("#s-tmdl") as HTMLTextAreaElement).value;
+
+            // Cache immediately so subsequent reads don't depend on update() round-trip timing
+            this.cachedApiUrl    = url;
+            this.cachedApiKeyRaw = key;
+            this.cachedModel     = mdl;
 
             this.host.persistProperties({
                 merge: [{ objectName: "aiSettings", selector: null, properties: { apiUrl: url, apiKey: this.maskString(key), model: mdl } }]
@@ -688,10 +715,7 @@ export class Visual implements IVisual {
     }
 
     private async callAIAPI(userMessage: string): Promise<string> {
-        const objects = this.dataView?.metadata?.objects as any;
-        const apiUrl  = String(objects?.aiSettings?.apiUrl || this.formattingSettings.aiSettingsCard.apiUrl.value || "");
-        const rawKey  = this.unmaskString(String(objects?.aiSettings?.apiKey || this.formattingSettings.aiSettingsCard.apiKey.value || ""));
-        const model   = String(objects?.aiSettings?.model  || this.formattingSettings.aiSettingsCard.model.value  || "gpt-3.5-turbo");
+        const { apiUrl, apiKeyRaw: rawKey, model } = this.getAISettings();
         const isGemini = apiUrl.includes("googleapis.com") || model.toLowerCase().startsWith("gemini");
 
         const enriched = this.buildEnrichedMessage(userMessage);
@@ -729,10 +753,7 @@ export class Visual implements IVisual {
     }
 
     private async callAIAPIWithStreaming(userMessage: string, onChunk: (c: string) => void): Promise<string> {
-        const objects  = this.dataView?.metadata?.objects as any;
-        const apiUrl   = String(objects?.aiSettings?.apiUrl || this.formattingSettings.aiSettingsCard.apiUrl.value || "");
-        const rawKey   = this.unmaskString(String(objects?.aiSettings?.apiKey || this.formattingSettings.aiSettingsCard.apiKey.value || ""));
-        const model    = String(objects?.aiSettings?.model  || this.formattingSettings.aiSettingsCard.model.value  || "gpt-3.5-turbo");
+        const { apiUrl, apiKeyRaw: rawKey, model } = this.getAISettings();
         const isGemini = apiUrl.includes("googleapis.com") || model.toLowerCase().startsWith("gemini");
 
         // Gemini: no native SSE — call once then replay

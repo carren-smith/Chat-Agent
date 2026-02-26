@@ -769,11 +769,7 @@
             "name": "WebAccess",
             "essential": true,
             "parameters": [
-                "https://api.openai.com",
-                "https://api.deepseek.com",
-                "https://api.anthropic.com",
-                "https://generativelanguage.googleapis.com",
-                "https://abi-chat-verify-yxoranbhea.cn-hangzhou.fcapp.run"
+                "https://"
             ]
         }
     ],
