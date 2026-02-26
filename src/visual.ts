@@ -481,38 +481,127 @@ export class Visual implements IVisual {
         this.sendButton.classList.toggle("generating", this.isGenerating);
     }
 
+    private buildEnrichedMessage(userMessage: string): string {
+        const dataContext = this.prepareDataContext();
+        if (!dataContext) return userMessage;
+        return (
+            `数据上下文：\n${dataContext}\n\n` +
+            `用户问题：${userMessage}\n\n` +
+            `请基于提供的数据回答用户问题。请务必使用HTML格式返回结果：` +
+            `1. 使用<h3>、<h4>作为标题 ` +
+            `2. 使用<table class="report-table">显示表格 ` +
+            `3. 使用<ul>、<ol>显示列表 ` +
+            `4. 换行请使用<br>或<p> ` +
+            `5. 重点内容使用<span class="report-emphasis">标注</span> ` +
+            `6. 不要使用Markdown格式，直接返回HTML代码`
+        );
+    }
+
     private async callAIAPI(userMessage: string): Promise<string> {
         const objects = this.dataView?.metadata?.objects as any;
-        const apiUrl = objects?.aiSettings?.apiUrl || this.formattingSettings.aiSettingsCard.apiUrl.value;
-        const apiKey = objects?.aiSettings?.apiKey || this.formattingSettings.aiSettingsCard.apiKey.value;
-        const model = objects?.aiSettings?.model || this.formattingSettings.aiSettingsCard.model.value;
-        const isGemini = String(apiUrl).includes("googleapis.com") || String(model).startsWith("gemini");
+        const apiUrl = String(objects?.aiSettings?.apiUrl || this.formattingSettings.aiSettingsCard.apiUrl.value || "");
+        const rawKey = this.unmaskString(String(objects?.aiSettings?.apiKey || this.formattingSettings.aiSettingsCard.apiKey.value || ""));
+        const model  = String(objects?.aiSettings?.model  || this.formattingSettings.aiSettingsCard.model.value  || "gpt-3.5-turbo");
+        const isGemini = apiUrl.includes("googleapis.com") || model.toLowerCase().startsWith("gemini");
+
+        const systemPrompt = this.getPowerBIStarSystemPrompt();
+        const history      = this.getConversationHistoryMessages();
+        const enriched     = this.buildEnrichedMessage(userMessage);
 
         if (isGemini) {
-            return `Gemini 模拟响应：${userMessage}`;
+            const historyText = history.map(m => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join("\n");
+            const resp = await fetch(apiUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: `${systemPrompt}\n\n${historyText}\nUser: ${enriched}` }] }],
+                    generationConfig: { temperature: 0.7 }
+                }),
+                signal: this.abortController?.signal
+            });
+            const data = await resp.json();
+            return data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
         }
 
-        const response = await fetch(apiUrl, {
+        const resp = await fetch(apiUrl, {
             method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${rawKey}` },
             body: JSON.stringify({
                 model,
                 stream: false,
-                messages: [{ role: "system", content: this.getPowerBIStarSystemPrompt() }, ...this.getConversationHistoryMessages(), { role: "user", content: userMessage }]
+                temperature: 0.7,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    ...history,
+                    { role: "user", content: enriched }
+                ]
             }),
             signal: this.abortController?.signal
         });
-        const data = await response.json();
+        const data = await resp.json();
         return data?.choices?.[0]?.message?.content || "";
     }
 
     private async callAIAPIWithStreaming(userMessage: string, onChunk: (chunk: string) => void): Promise<string> {
-        const text = await this.callAIAPI(userMessage);
-        for (const c of text) {
-            onChunk(c);
-            await new Promise((r) => setTimeout(r, 10));
+        const objects = this.dataView?.metadata?.objects as any;
+        const apiUrl = String(objects?.aiSettings?.apiUrl || this.formattingSettings.aiSettingsCard.apiUrl.value || "");
+        const rawKey = this.unmaskString(String(objects?.aiSettings?.apiKey || this.formattingSettings.aiSettingsCard.apiKey.value || ""));
+        const model  = String(objects?.aiSettings?.model  || this.formattingSettings.aiSettingsCard.model.value  || "gpt-3.5-turbo");
+        const isGemini = apiUrl.includes("googleapis.com") || model.toLowerCase().startsWith("gemini");
+
+        // Gemini: no native streaming — call non-streaming then replay char-by-char
+        if (isGemini) {
+            const full = await this.callAIAPI(userMessage);
+            for (const c of full) {
+                onChunk(c);
+                await new Promise(r => setTimeout(r, 10));
+            }
+            return full;
         }
-        return text;
+
+        // OpenAI-compatible: SSE streaming
+        const systemPrompt = this.getPowerBIStarSystemPrompt();
+        const history      = this.getConversationHistoryMessages();
+        const enriched     = this.buildEnrichedMessage(userMessage);
+
+        const resp = await fetch(apiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${rawKey}` },
+            body: JSON.stringify({
+                model,
+                stream: true,
+                temperature: 0.7,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    ...history,
+                    { role: "user", content: enriched }
+                ]
+            }),
+            signal: this.abortController?.signal
+        });
+
+        const reader  = resp.body!.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = "";
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const lines = decoder.decode(value, { stream: true }).split("\n");
+            for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                const payload = line.slice(6).trim();
+                if (payload === "[DONE]") continue;
+                try {
+                    const parsed = JSON.parse(payload);
+                    const text = parsed?.choices?.[0]?.delta?.content;
+                    if (text) { accumulated += text; onChunk(text); }
+                } catch { /* skip malformed SSE line */ }
+            }
+        }
+
+        return accumulated;
     }
 
     private getConversationHistoryMessages(): Array<{ role: string; content: string }> {
@@ -632,17 +721,62 @@ export class Visual implements IVisual {
         }
     }
 
-    private sanitizeHTML(value: string): string {
-        const div = document.createElement("div");
-        div.textContent = value || "";
-        return div.innerHTML;
+    private sanitizeHTML(html: string): string {
+        const ALLOWED_TAGS = new Set(["h3","h4","p","br","div","span","table","thead","tbody","tr","th","td","ul","ol","li","b","strong","i","em","u"]);
+        const ALLOWED_ATTRS = new Set(["class","style","rowspan","colspan","width","height","align"]);
+        try {
+            const doc = new DOMParser().parseFromString(html, "text/html");
+            const clean = (node: Node): Node | null => {
+                if (node.nodeType === Node.TEXT_NODE) return node.cloneNode(true);
+                if (node.nodeType !== Node.ELEMENT_NODE) return null;
+                const el = node as Element;
+                const tag = el.tagName.toLowerCase();
+                if (!ALLOWED_TAGS.has(tag)) {
+                    const frag = document.createDocumentFragment();
+                    el.childNodes.forEach(c => { const r = clean(c); if (r) frag.appendChild(r); });
+                    return frag;
+                }
+                const newEl = document.createElement(tag);
+                Array.from(el.attributes).forEach(attr => {
+                    if (ALLOWED_ATTRS.has(attr.name.toLowerCase())) newEl.setAttribute(attr.name, attr.value);
+                });
+                el.childNodes.forEach(c => { const r = clean(c); if (r) newEl.appendChild(r); });
+                return newEl;
+            };
+            const frag = document.createDocumentFragment();
+            doc.body.childNodes.forEach(c => { const r = clean(c); if (r) frag.appendChild(r); });
+            const wrapper = document.createElement("div");
+            wrapper.appendChild(frag);
+            return wrapper.innerHTML;
+        } catch {
+            return (html || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
     }
 
     private formatContentForDisplay(text: string): string {
-        return this.sanitizeHTML(text).replace(/\n/g, "<br/>");
+        const stripped = (text || "")
+            .replace(/^```html\s*/i, "")
+            .replace(/^```\s*/i, "")
+            .replace(/\s*```$/, "")
+            .trim();
+        return this.sanitizeHTML(stripped);
     }
 
     private formatToReportStyle(text: string): string {
+        // Detect embedded JSON data_query block and execute it client-side
+        const jsonBlockRegex = /```json\s*(\{[\s\S]*?"intent"\s*:\s*"data_query"[\s\S]*?\})\s*```/;
+        const match = text.match(jsonBlockRegex);
+        if (match) {
+            try {
+                const queryObj: DataQuery = JSON.parse(match[1]);
+                const before = text.slice(0, match.index);
+                const after = text.slice((match.index ?? 0) + match[0].length);
+                const queryResult = this.executeDataQuery(queryObj);
+                return this.formatContentForDisplay(before) + queryResult + this.formatContentForDisplay(after);
+            } catch {
+                // Fall through to default rendering
+            }
+        }
         return this.formatContentForDisplay(text);
     }
 
@@ -651,16 +785,54 @@ export class Visual implements IVisual {
     }
 
     private parseAIResponse(text: string): { text: string; chartData?: any } {
-        return { text: this.formatToReportStyle(text), chartData: this.shouldGenerateChart(text) ? this.generateChartFromData(text) : undefined };
+        const formattedText = this.formatToReportStyle(text);
+        const chartData = this.shouldGenerateChart(text) ? this.generateChartFromData(text) : undefined;
+        return { text: formattedText, chartData };
     }
 
     private shouldGenerateChart(text: string): boolean {
-        const keywords = ["图", "趋势", "分布", "占比", "柱状", "折线", "饼图", "同比", "环比", "可视化", "chart", "plot", "分析", "销量", "收入", "增长", "对比", "排名", "结构", "类别", "时间", "指标", "统计", "结果"];
-        return keywords.some((k) => text.includes(k));
+        const keywords = [
+            "生成图表","创建图表","画图表","制作图表","显示图表","绘制图表",
+            "画个图表","做个图表","来个图表","要个图表",
+            "画柱状图","画折线图","画饼图","做柱状图","做折线图","做饼图",
+            "生成柱状图","生成折线图","生成饼图","创建柱状图","创建折线图","创建饼图",
+            "用图表显示","用图表展示","图表展示","图表呈现"
+        ];
+        return keywords.some(k => text.includes(k));
     }
 
-    private generateChartFromData(_text: string): any {
-        return this.dataView?.table?.rows?.slice(0, 10) || [];
+    private generateChartFromData(text: string): any {
+        const table = this.dataView?.table;
+        if (!table || table.columns.length < 2 || table.rows.length === 0) return null;
+
+        const labels = table.rows.map(r => String(r[0] ?? ""));
+        const data = table.rows.map(r => Number(r[1]) || 0);
+
+        let type: "bar" | "line" | "pie" | "doughnut" = "bar";
+        if (text.includes("折线") || text.includes("趋势")) type = "line";
+        else if (text.includes("饼图")) type = "pie";
+        else if (text.includes("环形")) type = "doughnut";
+
+        const colors = ["#FF6384","#36A2EB","#FFCE56","#4BC0C0","#9966FF","#FF9F40","#FF6384","#C9CBCF"];
+
+        return {
+            type,
+            data: {
+                labels,
+                datasets: [{
+                    label: table.columns[1].displayName,
+                    data,
+                    backgroundColor: colors,
+                    borderColor: "#36A2EB",
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: true } }
+            }
+        };
     }
 
     private startNewChat(): void {
@@ -715,17 +887,160 @@ export class Visual implements IVisual {
     }
 
     private prepareDataContext(): string {
+        const parts: string[] = [];
+
+        // TMDL Schema — prepend if present (static, filter-independent metadata)
         const tmdl = TmdlManager.loadTmdl(this.dataView?.metadata?.objects);
-        return `${tmdl}\nRows:${this.dataView?.table?.rows?.length || 0}`;
+        if (tmdl) parts.push(`【数据模型上下文】\n${tmdl}`);
+
+        const table = this.dataView?.table;
+        // No table bound to this visual — return whatever we have (TMDL only or empty)
+        if (!table) return parts.join("\n\n");
+
+        const columns = table.columns;
+        const rows = table.rows;
+
+        // ── Layer 1: Data Overview ──────────────────────────────────────
+        // dataView.table already reflects the current slicer / filter context;
+        // row count and column list here describe what the user actually sees.
+        const colNames = columns.map(c => c.displayName).join("、");
+        parts.push(`数据概览：\n- 列数：${columns.length}\n- 行数：${rows.length}\n- 列名：${colNames}`);
+
+        // ── Layer 2: Pre-computed Key Statistics ────────────────────────
+        // Computed from filtered rows so values match what the user sees on screen.
+        // Percentage / ratio columns are flagged to prevent incorrect aggregation.
+        const statLines: string[] = [];
+        columns.forEach((col, ci) => {
+            const nums = rows
+                .map(r => r[ci])
+                .filter(v => typeof v === "number" && !isNaN(v as number)) as number[];
+            if (nums.length === 0) return;
+
+            const name = col.displayName;
+            const isRatio = /[%率占比比率]/.test(name);
+            if (isRatio) {
+                statLines.push(`- ${name}：[比率指标] (不可直接汇总)`);
+            } else {
+                const total = nums.reduce((a, b) => a + b, 0);
+                statLines.push(`- ${name}：总计=${total.toLocaleString()}`);
+            }
+        });
+        if (statLines.length > 0) {
+            parts.push(`【关键统计指标（已复核，请直接引用）】：\n${statLines.join("\n")}`);
+        }
+
+        // ── Layer 3: All Filtered Rows ──────────────────────────────────
+        // Serialised line by line; row set is already narrowed by PowerBI filters/slicers.
+        const rowLines = rows.map((row, ri) => {
+            const cells = columns.map((col, ci) => `${col.displayName}: ${this.formatCellValue(row[ci])}`).join("、");
+            return `${ri + 1}. ${cells}`;
+        }).join("\n");
+        if (rowLines) parts.push(rowLines);
+
+        return parts.join("\n\n");
     }
 
-    private executeDataQuery(_queryObj: DataQuery): string {
-        const rows = this.dataView?.table?.rows || [];
-        return `<div class="report-section">查询结果 (共 ${rows.length} 条)</div>`;
+    private executeDataQuery(queryObj: DataQuery): string {
+        const table = this.dataView?.table;
+        if (!table) return "<div class=\"report-section\">暂无数据</div>";
+
+        const columns = table.columns;
+
+        // ── Step 1: Convert to plain objects ───────────────────────────
+        let rows: Record<string, any>[] = table.rows.map(row => {
+            const obj: Record<string, any> = {};
+            columns.forEach((col, i) => { obj[col.displayName] = row[i]; });
+            return obj;
+        });
+
+        // ── Step 2: Apply filters ──────────────────────────────────────
+        if (queryObj.filters?.length) {
+            rows = rows.filter(row =>
+                queryObj.filters!.every(f => {
+                    const val = row[f.column];
+                    const fval = f.value;
+                    switch (f.operator) {
+                        case ">":        return Number(val) > Number(fval);
+                        case "<":        return Number(val) < Number(fval);
+                        case ">=":       return Number(val) >= Number(fval);
+                        case "<=":       return Number(val) <= Number(fval);
+                        case "==":       return String(val) === String(fval);
+                        case "!=":       return String(val) !== String(fval);
+                        case "contains": return String(val).includes(String(fval));
+                        default:         return true;
+                    }
+                })
+            );
+        }
+
+        // ── Step 3: GroupBy + Aggregations ────────────────────────────
+        if (queryObj.groupBy?.length) {
+            const groups = new Map<string, Record<string, any>[]>();
+            rows.forEach(row => {
+                const key = queryObj.groupBy!.map(g => String(row[g])).join("|");
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key)!.push(row);
+            });
+
+            rows = Array.from(groups.values()).map(groupRows => {
+                const result: Record<string, any> = {};
+                queryObj.groupBy!.forEach(g => { result[g] = groupRows[0][g]; });
+                (queryObj.aggregations || []).forEach(agg => {
+                    const vals = groupRows.map(r => r[agg.column]).filter(v => v !== null && v !== undefined);
+                    const nums = vals.map(Number).filter(v => !isNaN(v));
+                    const outKey = `${agg.op}(${agg.column})`;
+                    switch (agg.op) {
+                        case "sum":   result[outKey] = nums.reduce((a, b) => a + b, 0); break;
+                        case "avg":   result[outKey] = nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0; break;
+                        case "count": result[outKey] = vals.length; break;
+                        case "max":   result[outKey] = nums.length ? Math.max(...nums) : ""; break;
+                        case "min":   result[outKey] = nums.length ? Math.min(...nums) : ""; break;
+                        case "first": result[outKey] = vals[0] ?? ""; break;
+                    }
+                });
+                return result;
+            });
+        }
+
+        // ── Step 4: Sort ───────────────────────────────────────────────
+        if (queryObj.sort) {
+            const { column, direction } = queryObj.sort;
+            rows.sort((a, b) => {
+                const av = a[column], bv = b[column];
+                const an = Number(av), bn = Number(bv);
+                const cmp = !isNaN(an) && !isNaN(bn) ? an - bn : String(av).localeCompare(String(bv));
+                return direction === "desc" ? -cmp : cmp;
+            });
+        }
+
+        // ── Step 5: Limit ──────────────────────────────────────────────
+        if (queryObj.limit && queryObj.limit > 0) {
+            rows = rows.slice(0, queryObj.limit);
+        }
+
+        if (rows.length === 0) {
+            return `<div class="report-section">查询结果 (共 0 条)</div>`;
+        }
+
+        // ── Step 6: Render HTML table ──────────────────────────────────
+        const headers = Object.keys(rows[0]);
+        const thead = `<thead><tr>${headers.map(h => `<th>${this.formatCellValue(h)}</th>`).join("")}</tr></thead>`;
+        const tbody = `<tbody>${rows.map(row =>
+            `<tr>${headers.map(h => `<td>${this.formatCellValue(row[h])}</td>`).join("")}</tr>`
+        ).join("")}</tbody>`;
+
+        return `<div class="report-section">查询结果 (共 ${rows.length} 条)</div><table class="report-table">${thead}${tbody}</table>`;
     }
 
     private formatCellValue(value: any): string {
-        return value === null || value === undefined ? "" : String(value);
+        if (value === null || value === undefined) return "";
+        if (typeof value === "number") return value.toLocaleString();
+        return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
     }
 
     private copyToClipboard(text: string): void {
