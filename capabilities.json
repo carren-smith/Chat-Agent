@@ -767,10 +767,7 @@
         },
         {
             "name": "WebAccess",
-            "essential": true,
-            "parameters": [
-                "https://"
-            ]
+            "essential": true
         }
     ],
     "supportsLandingPage": false,

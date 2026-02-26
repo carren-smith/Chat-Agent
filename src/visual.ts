@@ -611,21 +611,42 @@ export class Visual implements IVisual {
         document.body.appendChild(modal);
     }
 
+    /**
+     * Safely read a text property from dataView.metadata.objects.
+     * Handles both raw strings (API v5 typical) and object-wrapped values
+     * ({ text: "..." } or { primitiveValue: { text: "..." } }) that appear
+     * in some PowerBI Desktop builds.
+     */
+    private readObjProp(obj: any, objectName: string, propName: string): string {
+        const raw = obj?.[objectName]?.[propName];
+        if (raw == null) return "";
+        if (typeof raw === "string") return raw;
+        if (typeof raw === "object") {
+            return String(raw.primitiveValue?.text ?? raw.text ?? "");
+        }
+        return String(raw);
+    }
+
     /** Single source of truth for current AI settings (dataView → cache → formattingSettings). */
     private getAISettings(): { apiUrl: string; apiKeyRaw: string; model: string } {
         const obj = this.dataView?.metadata?.objects as any;
+
         const apiUrl =
-            String(obj?.aiSettings?.apiUrl || "").trim() ||
+            this.readObjProp(obj, "aiSettings", "apiUrl").trim() ||
             this.cachedApiUrl ||
             this.formattingSettings.aiSettingsCard.apiUrl.value || "";
+
+        const maskedKey = this.readObjProp(obj, "aiSettings", "apiKey").trim();
         const apiKeyRaw =
-            this.unmaskString(String(obj?.aiSettings?.apiKey || "").trim()) ||
+            (maskedKey ? this.unmaskString(maskedKey) : "") ||
             this.cachedApiKeyRaw ||
             this.unmaskString(this.formattingSettings.aiSettingsCard.apiKey.value || "") || "";
+
         const model =
-            String(obj?.aiSettings?.model || "").trim() ||
+            this.readObjProp(obj, "aiSettings", "model").trim() ||
             this.cachedModel ||
             this.formattingSettings.aiSettingsCard.model.value || "";
+
         return { apiUrl, apiKeyRaw, model };
     }
 
@@ -754,9 +775,18 @@ export class Visual implements IVisual {
 
     private async callAIAPIWithStreaming(userMessage: string, onChunk: (c: string) => void): Promise<string> {
         const { apiUrl, apiKeyRaw: rawKey, model } = this.getAISettings();
+
+        // ── Pre-flight validation ──────────────────────────────────────────────
+        if (!apiUrl || !apiUrl.startsWith("http")) {
+            throw new Error("请先点击右上角 ⚙ 设置，填写 Base URL（需以 https:// 开头）");
+        }
+        if (!rawKey) {
+            throw new Error("请先点击右上角 ⚙ 设置，填写 API Key");
+        }
+
         const isGemini = apiUrl.includes("googleapis.com") || model.toLowerCase().startsWith("gemini");
 
-        // Gemini: no native SSE — call once then replay
+        // ── Gemini: no native SSE — call once then replay char-by-char ────────
         if (isGemini) {
             const full = await this.callAIAPI(userMessage);
             for (const c of full) {
@@ -766,39 +796,75 @@ export class Visual implements IVisual {
             return full;
         }
 
+        // ── OpenAI-compatible: SSE streaming ──────────────────────────────────
         const enriched = this.buildEnrichedMessage(userMessage);
         const history  = this.getConversationHistoryMessages();
         const sysPmt   = this.getSystemPrompt();
+        const effectiveModel = model || "gpt-3.5-turbo";
 
-        const resp = await fetch(apiUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${rawKey}` },
-            body: JSON.stringify({
-                model,
-                stream: true,
-                temperature: 0.7,
-                messages: [{ role: "system", content: sysPmt }, ...history, { role: "user", content: enriched }]
-            }),
-            signal: this.abortController?.signal
-        });
+        let resp: Response;
+        try {
+            resp = await fetch(apiUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${rawKey}` },
+                body: JSON.stringify({
+                    model: effectiveModel,
+                    stream: true,
+                    temperature: 0.7,
+                    messages: [{ role: "system", content: sysPmt }, ...history, { role: "user", content: enriched }]
+                }),
+                signal: this.abortController?.signal
+            });
+        } catch (err: any) {
+            // Translate "Failed to fetch" into a more actionable message
+            const label = apiUrl.replace(/^https?:\/\//, "").slice(0, 40);
+            throw new Error(
+                `连接失败（${label}）：${err?.message || err}。\n` +
+                `请检查：①Base URL 是否正确；②网络是否正常；③如在 PowerBI Desktop 请重新导入 .pbiviz`
+            );
+        }
 
-        const reader  = resp.body!.getReader();
-        const decoder = new TextDecoder();
+        if (!resp.ok) {
+            const body = await resp.text().catch(() => "");
+            throw new Error(`API 返回错误 ${resp.status}：${body.slice(0, 200)}`);
+        }
+
+        // ── Read SSE stream ───────────────────────────────────────────────────
+        // Some sandboxed iframe environments don't expose resp.body / ReadableStream.
+        // Fall back to reading the whole response as text and parsing SSE manually.
         let accumulated = "";
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            for (const line of decoder.decode(value, { stream: true }).split("\n")) {
+        if (resp.body && typeof resp.body.getReader === "function") {
+            const reader  = resp.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                for (const line of decoder.decode(value, { stream: true }).split("\n")) {
+                    if (!line.startsWith("data: ")) continue;
+                    const payload = line.slice(6).trim();
+                    if (payload === "[DONE]") continue;
+                    try {
+                        const t = JSON.parse(payload)?.choices?.[0]?.delta?.content;
+                        if (t) { accumulated += t; onChunk(t); }
+                    } catch { /* skip malformed SSE line */ }
+                }
+            }
+        } else {
+            // Fallback: ReadableStream not available — parse full SSE text
+            const raw = await resp.text();
+            for (const line of raw.split("\n")) {
                 if (!line.startsWith("data: ")) continue;
                 const payload = line.slice(6).trim();
                 if (payload === "[DONE]") continue;
                 try {
                     const t = JSON.parse(payload)?.choices?.[0]?.delta?.content;
                     if (t) { accumulated += t; onChunk(t); }
-                } catch { /* skip malformed SSE */ }
+                } catch { /* skip */ }
             }
         }
+
         return accumulated;
     }
 
