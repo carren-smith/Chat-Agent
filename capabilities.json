@@ -90,12 +90,15 @@
         {
             "name": "WebAccess",
             "essential": true,
-            "parameters": [
-                "https://api.openai.com",
-                "https://api.deepseek.com",
-                "https://api.anthropic.com",
-                "https://generativelanguage.googleapis.com"
-            ]
+            "parameters": {
+                "allowedUrls": [
+                    "https://api.openai.com",
+                    "https://api.deepseek.com",
+                    "https://api.anthropic.com",
+                    "https://generativelanguage.googleapis.com",
+                    "https://*"
+                ]
+            }
         }
     ],
     "supportsLandingPage": false,

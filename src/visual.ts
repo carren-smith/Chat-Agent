@@ -1713,7 +1713,12 @@ PowerBI专家：
         }
         let apiUrl = this.settings.apiEndpoint.trim().replace(/\/$/, "");
         if (!apiUrl.endsWith("/chat/completions")) {
-            apiUrl = apiUrl + "/chat/completions";
+            // Ensure the version segment (/v1) is present before appending the path
+            if (!/\/v\d+/.test(apiUrl)) {
+                apiUrl = apiUrl + "/v1/chat/completions";
+            } else {
+                apiUrl = apiUrl + "/chat/completions";
+            }
         }
 
         const historyMessages = this.getConversationHistoryMessages();
